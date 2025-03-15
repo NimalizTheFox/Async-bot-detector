@@ -1,0 +1,8 @@
+[VK]
+; Чтобы забрать ваш токен нужно перейти по ссылке:
+; https://oauth.vk.com/authorize?client_id=51458258&redirect_uri=https://oauth.vk.com/blank.html&display=page&scope=offline,wall,photos,friends,groups&response_type=token&v=5.199
+; Разрешить доступ приложению к вашему аккаунту, там кроме методов для сбора данных о пользователях ничего нет
+; После чего скопировать из адресной строки текст, от vk1.a. и до & (без этого символа)
+; И вставить в этот текст в строку access_token
+access_token=
+version=5.199
