@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import sys
-
 import aiosqlite
 import time
 import datetime
@@ -13,6 +12,8 @@ import configparser
 from copy import deepcopy
 from aiohttp import ClientSession, ClientTimeout
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from statistics import fmean, median
+from DBWorks import DBWorks
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
@@ -28,7 +29,8 @@ class AIOInfoGrabber:
         :param data_folder: Путь до папки, где будут храниться данные по текущему разбору (data/<название xls дока>)
         :param backup_seconds: Раз в сколько секунд информация сохраняется на диск, стандартное значение - 120 секунд
         """
-        self.all_users_id = sorted(list(set([int(item) for item in users])))   # Чтобы точно было int, так как в БД тоже int
+        # Чтобы точно было int, так как в БД тоже int
+        self.all_users_id = sorted(list(set([int(item) for item in users])))
         self.data_folder = data_folder
         self.sessions = {}
 
@@ -57,11 +59,11 @@ class AIOInfoGrabber:
                        "quotes", "relation", "universities", "screen_name", "verified", "counters"]
         self.fields_str = ','.join(fields_list)     # Все нужные поля юзеров в строку через запятую
 
-        # Заполнители профилей
+        # Поля заполнителей профиля
         self.open_fillers_list = fields_list[1:-3]
         self.close_fillers_list = ['city', 'has_photo', 'has_mobile', 'status', 'occupation']
 
-        # Поля счетчиков
+        # Поля счетчиков профиля
         self.open_counters_list = ['albums', 'audios', 'followers', 'friends', 'pages', 'photos', 'subscriptions',
                                    'videos', 'video_playlists', 'clips_followers', 'gifts']
         self.close_counters_list = ['friends', 'pages', 'subscriptions', 'posts']
@@ -75,52 +77,57 @@ class AIOInfoGrabber:
         self.sessions['db'] = aiosqlite.connect(fr'{self.data_folder}\data.db')
 
         async with self.sessions['vk'], self.sessions['db']:
-            await self.create_tables()  # Создаем БД и таблички
+            self.db_worker = DBWorks(self.sessions['db'])
+            await self.db_worker.create_tables()    # Создаем БД и таблички
 
             # Смотрим какие пользователи уже проверены и непроверенных проверяем
             # === ПОЛЬЗОВАТЕЛИ ===
-            checked_users = await self.get_data_from_db('SELECT DISTINCT user_id FROM users')
+            checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
             unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
             print(f'Всего: {len(self.all_users_id)}, '
                   f'Проверенно: {len(checked_users)}, '
                   f'Осталось: {len(unchecked_users)}')
             while len(unchecked_users) != 0:
                 await self.users_info_process(self.all_users_id)    # Сбор данных из сети
-                checked_users = await self.get_data_from_db('SELECT DISTINCT user_id FROM users')
+                checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
                 unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                 print(f'Всего: {len(self.all_users_id)}, '
                       f'Проверенно: {len(checked_users)}, '
                       f'Осталось: {len(unchecked_users)}')
 
             # === FOAF ===
-            ids_to_foaf = await self.get_data_from_db(
+            ids_to_foaf = await self.db_worker.get_data_in_list(
                 'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
             print(f'Предстоит проверить с помощью foaf: {len(ids_to_foaf)}')
             while len(ids_to_foaf) != 0:
                 await self.foaf_process(ids_to_foaf)
-                ids_to_foaf = await self.get_data_from_db(
+                ids_to_foaf = await self.db_worker.get_data_in_list(
                     'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
                 print(f'Предстоит проверить с помощью foaf: {len(ids_to_foaf)}')
 
             # === ГРУППЫ ===
-            ids_to_groups = await self.get_data_from_db(
+            ids_to_groups = await self.db_worker.get_data_in_list(
                 'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
             print(f'Предстоит проверить группы у {len(ids_to_groups)} пользователей')
             while len(ids_to_groups) != 0:
                 await self.groups_process(ids_to_groups)
-                ids_to_groups = await self.get_data_from_db(
+                ids_to_groups = await self.db_worker.get_data_in_list(
                     'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
                 print(f'Предстоит проверить группы у {len(ids_to_groups)} пользователей')
 
             # === ПОСТЫ ===
+            ids_to_posts = await self.db_worker.get_data_in_list(
+                'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+            print(f'Предстоит проверить посты у {len(ids_to_posts)} пользователей')
+            while len(ids_to_posts) != 0:
+                await self.posts_process(ids_to_posts)
+                ids_to_posts = await self.db_worker.get_data_in_list(
+                    'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+                print(f'Предстоит проверить посты у {len(ids_to_posts)} пользователей')
 
-    async def get_data_from_db(self, request):
-        db_response = await self.sessions['db'].execute(request)    # Отправка запроса к БД и ожидание ответа
-        result = await db_response.fetchall()           # Преобразование ответа в список кортежей
-        result_list = [item[0] for item in result]      # Преобразование в удобочитаемый список
-        return result_list
-
+    # ========== ПРОЦЕССЫ ДЛЯ ОБРАБОТКИ API ==========
     async def users_info_process(self, users_id):
+        """Разбитие на раунды сохранения и выполнение сбора информации по пользователям"""
         start_event = asyncio.Event()
         start_event.set()
 
@@ -148,6 +155,7 @@ class AIOInfoGrabber:
             await asyncio.gather(*save_tasks)
 
     async def foaf_process(self, users_id):
+        """Разбитие на раунды сохранения и выполнение сбора информации по датам"""
         start_event = asyncio.Event()
         start_event.set()
 
@@ -172,6 +180,7 @@ class AIOInfoGrabber:
             await self.sessions['db'].commit()
 
     async def groups_process(self, users_id):
+        """Разбитие на раунды сохранения и выполнение сбора информации по группам пользователей"""
         start_event = asyncio.Event()
         start_event.set()
 
@@ -194,13 +203,47 @@ class AIOInfoGrabber:
             save_tasks = []
             for item in results:
                 if 'execute_errors' in item:
-                    # Если есть ошибка 29, то запрещаем дальнейшее взаимодействие с методом, но цикл проходим
-                    pass
+                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом, но цикл проходим
+
+                    continue
                 if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_groups(item['response'])))
             await asyncio.gather(*save_tasks)
-
             await self.sessions['db'].commit()
+
+    async def posts_process(self, users_id):
+        """Разбитие на раунды сохранения и выполнение сбора информации по постам пользователей"""
+        start_event = asyncio.Event()
+        start_event.set()
+
+        # Собираем раунды со списками id пользователей
+        users_id_str = [str(item) for item in users_id]
+        id_rounds_to_info = [','.join(round_ids) for round_ids in self.list_split(users_id_str, 10)]
+        rounds = self.list_split(id_rounds_to_info, self.wall_rounds)  # И разбиваем по раундам сохранения\
+
+        for round_ids in rounds:  # Примерно по две минуты на раунд
+            events = [asyncio.Event() for _ in range(len(round_ids))]  # Создаем события для каждого потока
+            # Создаем задачи для каждого потока
+            tasks = [asyncio.create_task(self.walls_request(round_ids[0], start_event, events[0]))]
+            for i in range(1, len(round_ids)):
+                tasks.append(asyncio.create_task(self.walls_request(round_ids[i], events[i - 1], events[i])))
+
+            # Запускаем задачи
+            results = await asyncio.gather(*tasks)
+
+            # Сохраняем результаты
+            save_tasks = []
+            for item in results:
+                if 'execute_errors' in item:
+                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом, но цикл проходим
+
+                    continue
+                if 'response' in item:
+                    save_tasks.append(asyncio.create_task(self.write_posts(item['response'])))
+            await asyncio.gather(*save_tasks)
+            await self.sessions['db'].commit()
+
+
 
     @staticmethod
     def list_split(data_list: list, items_in_round: int):
@@ -210,6 +253,7 @@ class AIOInfoGrabber:
             rounds.append(data_list[i * items_in_round: i * items_in_round + items_in_round])
         return rounds
 
+    # ========== ЗАПРОСЫ К API ==========
     async def users_info_request(self, users: str, wait_event: asyncio.Event, my_event: asyncio.Event):
         """
         Запрос данных о пользователях через специальный метод API приложения
@@ -227,7 +271,7 @@ class AIOInfoGrabber:
             return translate_json
 
     async def foaf_request(self, user: int, wait_event: asyncio.Event, my_event: asyncio.Event):
-        """Запрос данных о времени создания профиля и времени последнего онлайна"""
+        """Запрос данных о времени создания профиля и времени последнего захода"""
         await wait_event.wait()
         await asyncio.sleep(0.0)
         my_event.set()
@@ -243,7 +287,7 @@ class AIOInfoGrabber:
             create_date = datetime.datetime.strptime(create_date.split("T")[0], "%Y-%m-%d")
             life_time = (today - create_date).days
 
-            # Достаем время последнего онлайна
+            # Достаем время последнего захода
             try:
                 last_logged = soup.find("ya:lastloggedin").get("dc:date")  # Не всегда есть
                 last_logged = datetime.datetime.strptime(last_logged.split("T")[0], "%Y-%m-%d")
@@ -285,6 +329,7 @@ class AIOInfoGrabber:
             translate_json = await response.json()
             return translate_json
 
+    # ========== УПОРЯДОЧИВАНИЕ ДАННЫХ ДЛЯ БД ==========
     @staticmethod
     async def user_data_analyse(user_dict: dict, fillers_list: list, counters_list: list):
         """
@@ -322,6 +367,7 @@ class AIOInfoGrabber:
 
     @staticmethod
     async def group_data_analyse(user_dict: list):
+        """Анализ данных групп профиля"""
         items = user_dict[1]
 
         try:
@@ -345,180 +391,110 @@ class AIOInfoGrabber:
         save_values = [int(user_dict[0]), items['count'], without_photo, closed_groups, type_page, type_group]
         return save_values
 
+    @staticmethod
+    async def wall_data_analyse(user_dict: list):
+        """Анализ данных со стены профиля"""
+        items = user_dict[1]
+        posts = 0                   # Кол-во постов
+        reposts = 0                 # Кол-во репостов
+        max_id = items['count']     # Максимальный id с удаленными
+        comments_counter = []       # Кол-во комментариев под всеми постами
+        likes_counter = []          # Кол-во лайков под всеми постами
+        views_counter = []          # Кол-во просмотров под всеми постами
+        reposts_counter = []        # Кол-во репостов под всеми постами
+        posts_with_text = 0         # Кол-во постов с текстом
 
+        # Кол-во постов в ответе (если их всего больше 100, то и здесь обычно 100)
+        posts_in_response = len(items['items']) if len(items['items']) != 0 else 1
 
-    async def create_tables(self):
-        """Создание таблиц для БД"""
-        # Таблица пользователей
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users
-            (
-                user_id INTEGER PRIMARY KEY,
-                deactivated INTEGER, --0 или 1: 0 - действует, 1 - забанен/удален 
-                is_close INTEGER, --закрыт ли профиль
-                foaf_checked INTEGER DEFAULT 0, --просто проверены ди для этого профиля все остальное
-                group_checked INTEGER DEFAULT 0,
-                wall_checked INTEGER DEFAULT 0
-            )
-            """
-        )
+        for item in items['items']:
+            # Проходимся по всем постам и забираем разную статистику
+            max_id = max(item['id'], max_id)    # Смотрим есть ли удаленные посты
+            if 'copy_history' in item:          # Определяем репост это или нет
+                reposts += 1
+            else:
+                posts += 1
 
-        # Таблица информации о закрытых пользователях
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users_info_close
-            (
-               user_id INTEGER PRIMARY KEY,
-                --Заполнители профиля, только 0 или 1
-                city INTEGER, has_photo INTEGER, has_mobile INTEGER, status INTEGER,
-                occupation INTEGER, have_screen_name INTEGER,
-                profile_fullness REAL, --На сколько из 6 параметров заполнен профиль (n/6) 
-                
-                --Счетчики, have_* только 0 или 1, остальные - полноценный int 
-                have_friends INTEGER, friends INTEGER,
-                have_pages INTEGER, pages INTEGER, 
-                have_subscriptions INTEGER, subscriptions INTEGER,
-                have_posts INTEGER, posts INTEGER,
-                counters_fullness REAL --Сколько из 4 счетчиков есть у профиля (n/4)
-            )
-            """
-        )
+            if 'comments' in item:
+                comments_counter.append(item['comments']['count'])  # Смотрим сколько комментариев
+            if 'likes' in item:
+                likes_counter.append(item['likes']['count'])        # Смотрим сколько лайков
+            if 'views' in item:
+                views_counter.append(item['views']['count'])        # Смотрим сколько просмотров (не всегда есть)
+            if 'reposts' in item:
+                reposts_counter.append(item['reposts']['count'])    # Смотрим сколько репостов
+            if item['text'].strip() != '':                          # И смотрим есть ли текст в посте
+                posts_with_text += 1
 
-        # Таблица информации об открытых пользователях
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users_info_open
-            (
-                user_id INTEGER PRIMARY KEY, --ID пользователя
-                --Заполнители профиля, только 0 или 1
-                about INTEGER, activities INTEGER, books INTEGER, career INTEGER, city INTEGER, country INTEGER,
-                has_photo INTEGER, has_mobile INTEGER, home_town INTEGER, schools INTEGER, status INTEGER, 
-                games INTEGER, interests INTEGER, military INTEGER, movies INTEGER, music INTEGER,
-                occupation INTEGER, personal INTEGER, quotes INTEGER, relation INTEGER, universities INTEGER,
-                have_screen_name INTEGER,
-                profile_fullness REAL, --На сколько из 22 параметров заполнен профиль (n/22) 
-                            
-                --Счетчики, have_* только 0 или 1, остальные - полноценный int 
-                have_albums INTEGER, albums INTEGER, 
-                have_audios INTEGER, audios INTEGER,
-                have_followers INTEGER, followers INTEGER,
-                have_friends INTEGER, friends INTEGER,
-                have_pages INTEGER, pages INTEGER, 
-                have_photos INTEGER, photos INTEGER,
-                have_subscriptions INTEGER, subscriptions INTEGER,
-                have_videos INTEGER, videos INTEGER,
-                have_video_playlists INTEGER, video_playlists INTEGER,
-                have_clips_followers INTEGER, clips_followers INTEGER, 
-                have_gifts INTEGER, gifts INTEGER,
-                counters_fullness REAL --Сколько из 11 счетчиков есть у профиля (n/11)
-            );
-            """
-        )
+        def mmmm(counter: list):
+            """min, max, mean, median"""
+            if len(counter) == 0:
+                return [0, 0, 0, 0]
+            else:
+                return [min(counter), max(counter), fmean(counter), median(counter)]
 
-        # Таблица информации о времени жизни и последнем онлайне пользователей
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users_foaf
-            (
-                user_id INTEGER PRIMARY KEY,
-                life_days INTEGER,
-                last_log_days INTEGER    
-            );
-            """
-        )
+        # Складываем все в правильном порядке
+        save_values = [int(user_dict[0]), items['count'], posts/posts_in_response, reposts/posts_in_response, max_id]
+        save_values.extend(mmmm(comments_counter))
+        save_values.extend(mmmm(likes_counter))
+        save_values.extend(mmmm(views_counter))
+        save_values.extend(mmmm(reposts_counter))
+        save_values.append(posts_with_text/posts_in_response)
+        return save_values
 
-        # Таблица информации о группах открытых пользователей
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users_groups
-            (
-                user_id INTEGER PRIMARY KEY,
-                groups_count INTEGER,
-                groups_without_photo INTEGER,
-                closed_groups INTEGER,
-                type_page INTEGER,
-                type_group INTEGER
-            );
-            """
-        )
-
-        # Таблица информации о постах открытых пользователей
-        await self.sessions['db'].execute(
-            """
-            CREATE TABLE IF NOT EXISTS users_posts
-            (
-                user_id INTEGER PRIMARY KEY,
-                posts_count INTEGER, 
-                posts_to_all_rel REAL, --Отношение постов ко всем
-                reposts_to_all_rel REAL, --Отношение репостов ко всем 
-                posts_max_id INTEGER, --Количество постов со всеми удаленными 
-                posts_to_live_rel REAL, --Сколько постов в день за жизнь
-                min_comms INTEGER, max_comms INTEGER, avg_comms REAL, mid_comms INTEGER, --Стат по комментариям
-                min_likes INTEGER, max_likes INTEGER, avg_likes REAL, mid_likes INTEGER, --Стат по лайкам
-                min_views INTEGER, max_views INTEGER, avg_views REAL, mid_views INTEGER, --Стат по просмотрам
-                min_reposts INTEGER, max_reposts INTEGER, avg_reposts REAL, mid_reposts INTEGER, --Стат по репостам
-                posts_with_text_rel REAL --Отношение постов с текстами ко всем 
-            );
-            """
-        )
-
-        # И запись изменений на диск
-        await self.sessions['db'].commit()
-
+    # ========== ЗАПИСЬ ДАННЫХ В БД ==========
     async def write_users_info(self, results: list):
-        """
-        Вытаскивает данные из ответов API и сохраняет их в БД SQLite
-        :param results: ответ API
-        """
+        """Сохраняет данные по пользователям в БД"""
         for item in results:
-            # Сначала заполняем начальные данные о пользователе, его id, удален ли его профиль и закрыт ли
-            await self.sessions['db'].execute(
-                'INSERT INTO users (user_id, deactivated, is_close) VALUES(?, ?, ?)',
-                (item['id'],
-                 0 if item.get('deactivated') is None else 1,
-                 1 if item['is_closed'] else 0)
-            )
+            # Сначала сохраняем начальные данные о пользователе, его id, удален ли его профиль и закрыт ли
+            await self.db_worker.save_user_result(item)
 
             # Потом разбираем более конкретно
             if item.get('deactivated') is None and not item['is_closed']:       # Если он не удален и открыт
+                # То упорядочиваем данные как для открытого профиля
                 save_values = await self.user_data_analyse(item, self.open_fillers_list, self.open_counters_list)
-                await self.sessions['db'].execute(                              # Сохраняем в БД
-                    f'INSERT INTO users_info_open VALUES({", ".join(["?" for _ in range(47)])})',
-                    save_values)
+                await self.db_worker.save_open_profile_data(save_values)
             elif item.get('deactivated') is None and item['is_closed']:         # Профиль не удален, но закрыт
+                # То упорядочиваем данные как для закрытого профиля
                 save_values = await self.user_data_analyse(item, self.close_fillers_list, self.close_counters_list)
-                await self.sessions['db'].execute(
-                    f'INSERT INTO users_info_close VALUES({", ".join(["?" for _ in range(17)])})',
-                    save_values)
-
-            # И запоминаем изменения
+                await self.db_worker.save_close_profile_data(save_values)
+            # И запоминаем изменения в БД
             await self.sessions['db'].commit()
 
     async def write_foaf(self, result: dict):
-        await self.sessions['db'].execute(
-            'UPDATE users SET foaf_checked = ? WHERE user_id = ?',
-            (1, result['id'])
-        )
-
-        await self.sessions['db'].execute(  # Сохраняем в БД
-            f'INSERT INTO users_foaf VALUES(?, ?, ?)',
-            (result['id'], result['life_time'], result['last_log_time']))
+        """Записывает данные foaf в БД"""
+        # Не спрашивай почему тут так мало. Так надо
+        await self.db_worker.save_and_update_foaf_data(result)
 
     async def write_groups(self, results: list):
+        """Сохраняет данные об группах пользователей в БД"""
         for item in results:
-            await self.sessions['db'].execute(
-                'UPDATE users SET group_checked = ? WHERE user_id = ?',
-                (1, int(item[0]))
-            )
+            if item[1] is False:
+                await self.db_worker.remove_from_all_tables(int(item[0]))
+                print(int(item[0]))
+                print(item)
 
-            save_values = await self.group_data_analyse(item)
-            await self.sessions['db'].execute(
-                f'INSERT INTO users_groups VALUES({", ".join(["?" for _ in range(6)])})',
-                save_values)
+                # Внести id в список повторной проверки.
+                # Записать в лог.
+            else:
+                await self.db_worker.update_user_group(item)
+                save_values = await self.group_data_analyse(item)
+                await self.db_worker.save_group_data(save_values)
 
-    async def write_walls(self, results: list):
-        pass
+    async def write_posts(self, results: list):
+        """Сохраняет данные об постах пользователей в БД"""
+        for item in results:
+            if item[1] is False:
+                await self.db_worker.remove_from_all_tables(int(item[0]))
+                print(int(item[0]))
+                print(item)
+
+                # Внести id в список повторной проверки.
+                # Записать в лог.
+            else:
+                await self.db_worker.update_user_wall(item)
+                save_values = await self.wall_data_analyse(item)
+                await self.db_worker.save_wall_data(save_values)
 
 
 
