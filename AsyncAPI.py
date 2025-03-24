@@ -1,6 +1,8 @@
 import asyncio
 import copy
 import sys
+
+import aiohttp
 import aiosqlite
 import time
 import datetime
@@ -13,7 +15,7 @@ from copy import deepcopy
 from aiohttp import ClientSession, ClientTimeout
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from statistics import fmean, median
-from DBWorks import DBWorks
+from DBWorks import AioDBWorks
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
@@ -22,26 +24,38 @@ config.read("settings.ini", encoding='utf-8')  # Читаем конфиг
 
 
 class AIOInfoGrabber:
-    def __init__(self, users: list, data_folder: str, backup_seconds: int = 120):
+    def __init__(self, users: list,
+                 data_folder: str,
+                 access_token: str,
+                 round_seconds: int = 120,
+                 proxy: str = None,
+                 proxy_auth: list[str, str] = None):
         """
         Класс, предназначенный для сбора информации о множестве пользователей за малое время
-        :param users: Список пользователей, которых нужно проверить (вообще все пользователи из документа)
+        :param users: Список пользователей, которых нужно проверить
         :param data_folder: Путь до папки, где будут храниться данные по текущему разбору (data/<название xls дока>)
-        :param backup_seconds: Раз в сколько секунд информация сохраняется на диск, стандартное значение - 120 секунд
+        :param access_token: Токен от VK API
+        :param round_seconds: Раз в сколько секунд информация сохраняется на диск, стандартное значение - 120 секунд
+        :param proxy: Прокси, если есть
+        :param proxy_auth: Логин и пароль для прокси, если есть
         """
-        # Чтобы точно было int, так как в БД тоже int
         self.all_users_id = sorted(list(set([int(item) for item in users])))
         self.data_folder = data_folder
         self.sessions = {}
+        self.proxy = proxy
+        self.proxy_auth = proxy_auth
+        self.db_worker: AioDBWorks | None = None
 
         # Сколько запросов к API сделать за backup_seconds секунд
         # Задержка ответа на запрос о пользователях - 5 секунд, группах - 4 секунды, постах - 15 секунд, foaf - 0.6
         # Оставляется 10% на погрешность
-        # Потом делим на 0.4 секунды, которые нужны чтобы API не заблокировался
-        self.user_info_rounds = int((backup_seconds - 5) / 1.1 / 0.4)
-        self.group_rounds = int((backup_seconds - 4) / 1.1 / 0.4)
-        self.wall_rounds = int((backup_seconds - 15) / 1.1 / 0.4)
-        self.foaf_rounds = int((backup_seconds - 0.6) / 1.1 / 0.004)
+        # Потом делим на 0.4 секунды, которые нужны чтобы API не заблокировался,
+        # для foaf - 0.004, так как он не связан с API и может отвечать чаще
+        # Все значения для стандартного значения в 120 секунд
+        self.user_info_rounds = int((round_seconds - 5) / 1.1 / 0.4)    # 261 пакет id, по 25, всего 6 525 id
+        self.group_rounds = int((round_seconds - 4) / 1.1 / 0.4)        # 263 пакета id, по 25, всего 6 575 id
+        self.wall_rounds = int((round_seconds - 15) / 1.1 / 0.4)        # 238 покетов id, по 10, всего 2 380 id
+        self.foaf_rounds = int((round_seconds - 0.6) / 1.1 / 0.004)     # 27 136 id
 
         # Ссылки на методы для сбора информации
         self.users_info_url = 'https://api.vk.com/method/execute.users_info'
@@ -49,8 +63,16 @@ class AIOInfoGrabber:
         self.users_wall_url = 'https://api.vk.com/method/execute.walls_info'
         self.foaf_url = 'https://vk.com/foaf.php'
 
-        self.access_token = config['VK']['access_token']
-        self.version = config['VK']['version']
+        self.access_token = access_token
+        self.version = 5.199
+
+        # Достигнуты ли лимиты метода
+        self.limit_reached = {'users': False,
+                              'groups': False,
+                              'walls': False}
+
+        # Если не проверили все профили, то нужен повтор
+        self.need_repeat = False
 
         # Запрос полей для API, а так же заполнители профиля у открытых
         fields_list = ["user_id", "about", "activities", "books", "career", "city", "country",
@@ -69,61 +91,86 @@ class AIOInfoGrabber:
         self.close_counters_list = ['friends', 'pages', 'subscriptions', 'posts']
 
         # Сразу при объявлении класса запускаем
-        asyncio.run(self.start())
+        # asyncio.run(self.start())
 
-    async def start(self):
+    async def start(self, method: str):
+        """
+        ВЫПОЛНЯТЬ С ПОМОЩЬЮ asyncio.run(self.start(method))!
+        Выполняет сбор информации по выбранному методу.
+        :param method: 'users', 'foaf', 'groups' и 'walls', только они.
+        :return: Есть ли лимиты и нужен ли повтор сбора информации
+        """
+        if method not in ['users', 'foaf', 'groups', 'walls']:
+            raise Exception('Некорректно указанный метод для AIOInfoGrabber(*).start(method)')
+
         # Разные подключения
-        self.sessions['vk'] = ClientSession(timeout=ClientTimeout(total=30))
+        # Если есть прокси, то
+        proxy_auth = aiohttp.BasicAuth(self.proxy_auth[0], self.proxy_auth[1]) if self.proxy_auth is not None else None
+        self.sessions['vk'] = ClientSession(timeout=ClientTimeout(total=30), proxy=self.proxy, proxy_auth=proxy_auth)
         self.sessions['db'] = aiosqlite.connect(fr'{self.data_folder}\data.db')
 
         async with self.sessions['vk'], self.sessions['db']:
-            self.db_worker = DBWorks(self.sessions['db'])
+            self.db_worker = AioDBWorks(self.sessions['db'])
             await self.db_worker.create_tables()    # Создаем БД и таблички
 
-            # Смотрим какие пользователи уже проверены и непроверенных проверяем
             # === ПОЛЬЗОВАТЕЛИ ===
-            checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
-            unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
-            print(f'Всего: {len(self.all_users_id)}, '
-                  f'Проверенно: {len(checked_users)}, '
-                  f'Осталось: {len(unchecked_users)}')
-            while len(unchecked_users) != 0:
-                await self.users_info_process(self.all_users_id)    # Сбор данных из сети
+            if method == 'users':
+                # Смотрим какие пользователи уже проверены и непроверенных проверяем
                 checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
                 unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                 print(f'Всего: {len(self.all_users_id)}, '
                       f'Проверенно: {len(checked_users)}, '
                       f'Осталось: {len(unchecked_users)}')
+                while len(unchecked_users) != 0 and not self.limit_reached['users']:
+                    await self.users_info_process(self.all_users_id)    # Сбор данных из сети
+                    checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
+                    unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
+                    print(f'Всего: {len(self.all_users_id)}, '
+                          f'Проверенно: {len(checked_users)}, '
+                          f'Осталось: {len(unchecked_users)}')
+                if len(unchecked_users) != 0:
+                    self.need_repeat = True
 
             # === FOAF ===
-            ids_to_foaf = await self.db_worker.get_data_in_list(
-                'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
-            print(f'Предстоит проверить с помощью foaf: {len(ids_to_foaf)}')
-            while len(ids_to_foaf) != 0:
-                await self.foaf_process(ids_to_foaf)
+            elif method == 'foaf':
                 ids_to_foaf = await self.db_worker.get_data_in_list(
                     'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
                 print(f'Предстоит проверить с помощью foaf: {len(ids_to_foaf)}')
+                while len(ids_to_foaf) != 0:
+                    await self.foaf_process(ids_to_foaf)
+                    ids_to_foaf = await self.db_worker.get_data_in_list(
+                        'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
+                    print(f'Предстоит проверить с помощью foaf: {len(ids_to_foaf)}')
+                if len(ids_to_foaf) != 0:
+                    self.need_repeat = True
 
             # === ГРУППЫ ===
-            ids_to_groups = await self.db_worker.get_data_in_list(
-                'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
-            print(f'Предстоит проверить группы у {len(ids_to_groups)} пользователей')
-            while len(ids_to_groups) != 0:
-                await self.groups_process(ids_to_groups)
+            elif method == 'groups':
                 ids_to_groups = await self.db_worker.get_data_in_list(
                     'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
                 print(f'Предстоит проверить группы у {len(ids_to_groups)} пользователей')
+                while len(ids_to_groups) != 0 and not self.limit_reached['groups']:
+                    await self.groups_process(ids_to_groups)
+                    ids_to_groups = await self.db_worker.get_data_in_list(
+                        'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
+                    print(f'Предстоит проверить группы у {len(ids_to_groups)} пользователей')
+                if len(ids_to_groups) != 0:
+                    self.need_repeat = True
 
             # === ПОСТЫ ===
-            ids_to_posts = await self.db_worker.get_data_in_list(
-                'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
-            print(f'Предстоит проверить посты у {len(ids_to_posts)} пользователей')
-            while len(ids_to_posts) != 0:
-                await self.posts_process(ids_to_posts)
+            elif method == 'walls':
                 ids_to_posts = await self.db_worker.get_data_in_list(
                     'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
                 print(f'Предстоит проверить посты у {len(ids_to_posts)} пользователей')
+                while len(ids_to_posts) != 0 and not self.limit_reached['walls']:
+                    await self.posts_process(ids_to_posts)
+                    ids_to_posts = await self.db_worker.get_data_in_list(
+                        'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+                    print(f'Предстоит проверить посты у {len(ids_to_posts)} пользователей')
+                if len(ids_to_posts) != 0:
+                    self.need_repeat = True
+
+            return self.limit_reached, self.need_repeat
 
     # ========== ПРОЦЕССЫ ДЛЯ ОБРАБОТКИ API ==========
     async def users_info_process(self, users_id):
@@ -149,7 +196,16 @@ class AIOInfoGrabber:
             # Сохраняем результаты
             save_tasks = []
             for item in results:
-                # if 'response' in item:
+                if 'execute_errors' in item:
+                    self.need_repeat = True
+                    limit_reached_here = False
+                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом
+                    for error in item['execute_errors']:
+                        if error['error_code'] == 29:
+                            limit_reached_here = True
+                            self.limit_reached['groups'] = True
+                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                        continue
                 if 'execute_errors' not in item and 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_users_info(item['response'])))
             await asyncio.gather(*save_tasks)
@@ -175,7 +231,8 @@ class AIOInfoGrabber:
             # Сохраняем результаты
             save_tasks = []
             for item in results:
-                save_tasks.append(asyncio.create_task(self.write_foaf(item)))
+                if item is not None:
+                    save_tasks.append(asyncio.create_task(self.write_foaf(item)))
             await asyncio.gather(*save_tasks)
             await self.sessions['db'].commit()
 
@@ -203,9 +260,15 @@ class AIOInfoGrabber:
             save_tasks = []
             for item in results:
                 if 'execute_errors' in item:
-                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом, но цикл проходим
-
-                    continue
+                    self.need_repeat = True
+                    limit_reached_here = False
+                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом
+                    for error in item['execute_errors']:
+                        if error['error_code'] == 29:
+                            limit_reached_here = True
+                            self.limit_reached['groups'] = True
+                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                        continue
                 if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_groups(item['response'])))
             await asyncio.gather(*save_tasks)
@@ -235,15 +298,19 @@ class AIOInfoGrabber:
             save_tasks = []
             for item in results:
                 if 'execute_errors' in item:
-                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом, но цикл проходим
-
-                    continue
+                    self.need_repeat = True
+                    limit_reached_here = False
+                    # Если есть ошибка 29, то запрещаем ключу дальнейшее взаимодействие с методом
+                    for error in item['execute_errors']:
+                        if error['error_code'] == 29:
+                            limit_reached_here = True
+                            self.limit_reached['groups'] = True
+                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                        continue
                 if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_posts(item['response'])))
             await asyncio.gather(*save_tasks)
             await self.sessions['db'].commit()
-
-
 
     @staticmethod
     def list_split(data_list: list, items_in_round: int):
@@ -271,21 +338,31 @@ class AIOInfoGrabber:
             return translate_json
 
     async def foaf_request(self, user: int, wait_event: asyncio.Event, my_event: asyncio.Event):
-        """Запрос данных о времени создания профиля и времени последнего захода"""
+        """
+        Запрос данных о времени создания профиля и времени последнего захода
+        :param user: id пользователя, которого нужно проверить.
+        :param wait_event: Событие, которого ждет процедура, чтобы отправить запрос.
+        :param my_event: Событие, в котором процедура сообщает, что запрос отправлен.
+        :return: Словарь с ответом от FOAF
+        """
         await wait_event.wait()
-        await asyncio.sleep(0.0)
+        await asyncio.sleep(0.0)    # Так нужно
         my_event.set()
 
         async with self.sessions['vk'].get(url=self.foaf_url, params={'id': user}) as response:
             src = await response.text()
             soup = BeautifulSoup(src, "lxml")
-
             today = datetime.datetime.now()
 
             # Достаем дату создания профиля (её нет только у удаленных профилей)
-            create_date = soup.find("ya:created").get("dc:date")
-            create_date = datetime.datetime.strptime(create_date.split("T")[0], "%Y-%m-%d")
-            life_time = (today - create_date).days
+            try:
+                create_date = soup.find("ya:created").get("dc:date")
+                create_date = datetime.datetime.strptime(create_date.split("T")[0], "%Y-%m-%d")
+                life_time = (today - create_date).days
+            except:
+                # На случай если профиль удалили, пока собирали информацию
+                await self.db_worker.remove_from_all_tables(int(user))
+                return None
 
             # Достаем время последнего захода
             try:
@@ -369,24 +446,17 @@ class AIOInfoGrabber:
     async def group_data_analyse(user_dict: list):
         """Анализ данных групп профиля"""
         items = user_dict[1]
-
-        try:
-            without_photo = 0
-            closed_groups = 0
-            type_page = 0
-            type_group = 0
-            for item in items['items']:
-                without_photo += item.get('has_photo', 0)
-                closed_groups += item['is_closed']
-                if item['type'] == 'group':
-                    type_group += 1
-                elif item['type'] == 'page':
-                    type_page += 1
-
-        except:
-            print(int(user_dict[0]))
-            print(user_dict)
-            sys.exit()
+        without_photo = 0
+        closed_groups = 0
+        type_page = 0
+        type_group = 0
+        for item in items['items']:
+            without_photo += item.get('has_photo', 0)
+            closed_groups += item['is_closed']
+            if item['type'] == 'group':
+                type_group += 1
+            elif item['type'] == 'page':
+                type_page += 1
 
         save_values = [int(user_dict[0]), items['count'], without_photo, closed_groups, type_page, type_group]
         return save_values
@@ -471,11 +541,9 @@ class AIOInfoGrabber:
         for item in results:
             if item[1] is False:
                 await self.db_worker.remove_from_all_tables(int(item[0]))
-                print(int(item[0]))
-                print(item)
-
-                # Внести id в список повторной проверки.
-                # Записать в лог.
+                self.need_repeat = True
+                # print(int(item[0]))
+                # print(item)
             else:
                 await self.db_worker.update_user_group(item)
                 save_values = await self.group_data_analyse(item)
@@ -486,11 +554,9 @@ class AIOInfoGrabber:
         for item in results:
             if item[1] is False:
                 await self.db_worker.remove_from_all_tables(int(item[0]))
-                print(int(item[0]))
-                print(item)
-
-                # Внести id в список повторной проверки.
-                # Записать в лог.
+                self.need_repeat = True
+                # print(int(item[0]))
+                # print(item)
             else:
                 await self.db_worker.update_user_wall(item)
                 save_values = await self.wall_data_analyse(item)

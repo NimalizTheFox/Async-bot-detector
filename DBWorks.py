@@ -1,7 +1,7 @@
 import aiosqlite
 
 
-class DBWorks:
+class AioDBWorks:
     def __init__(self, session: aiosqlite.connect):
         """
         Класс, предназначенный для асинхронной работы с БД

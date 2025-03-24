@@ -1,0 +1,7 @@
+data
+venv
+*.json
+*.ini
+test.py
+test2.py
+*.txt
