@@ -1,17 +1,10 @@
 import asyncio
-import copy
-import sys
-
 import aiohttp
 import aiosqlite
-import time
 import datetime
 import lxml
-import json
 import math
 import warnings
-import configparser
-from copy import deepcopy
 from aiohttp import ClientSession, ClientTimeout
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from statistics import fmean, median
@@ -19,25 +12,22 @@ from DBWorks import AioDBWorks
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-config = configparser.ConfigParser()  # Создаём объект парсера
-config.read("settings.ini", encoding='utf-8')  # Читаем конфиг
-
 
 class AIOInfoGrabber:
     def __init__(self, users: list,
                  data_folder: str,
                  access_token: str,
-                 round_seconds: int = 120,
                  proxy: str = None,
-                 proxy_auth: list[str, str] = None):
+                 proxy_auth: list[str, str] = None,
+                 round_seconds: int = 120):
         """
         Класс, предназначенный для сбора информации о множестве пользователей за малое время
         :param users: Список пользователей, которых нужно проверить
         :param data_folder: Путь до папки, где будут храниться данные по текущему разбору (data/<название xls дока>)
         :param access_token: Токен от VK API
-        :param round_seconds: Раз в сколько секунд информация сохраняется на диск, стандартное значение - 120 секунд
         :param proxy: Прокси, если есть
         :param proxy_auth: Логин и пароль для прокси, если есть
+        :param round_seconds: Раз в сколько секунд информация сохраняется на диск, стандартное значение - 120 секунд
         """
         self.all_users_id = sorted(list(set([int(item) for item in users])))
         self.data_folder = data_folder
@@ -98,7 +88,7 @@ class AIOInfoGrabber:
         ВЫПОЛНЯТЬ С ПОМОЩЬЮ asyncio.run(self.start(method))!
         Выполняет сбор информации по выбранному методу.
         :param method: 'users', 'foaf', 'groups' и 'walls', только они.
-        :return: Есть ли лимиты и нужен ли повтор сбора информации
+        :return: Лимиты и нужен ли повтор
         """
         if method not in ['users', 'foaf', 'groups', 'walls']:
             raise Exception('Некорректно указанный метод для AIOInfoGrabber(*).start(method)')
@@ -122,7 +112,7 @@ class AIOInfoGrabber:
                       f'Проверенно: {len(checked_users)}, '
                       f'Осталось: {len(unchecked_users)}')
                 while len(unchecked_users) != 0 and not self.limit_reached['users']:
-                    await self.users_info_process(self.all_users_id)    # Сбор данных из сети
+                    await self.users_info_process(unchecked_users)    # Сбор данных из сети
                     checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
                     unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                     print(f'Всего: {len(self.all_users_id)}, '
@@ -204,9 +194,9 @@ class AIOInfoGrabber:
                         if error['error_code'] == 29:
                             limit_reached_here = True
                             self.limit_reached['groups'] = True
-                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                    if limit_reached_here:  # Если это была ошибка 29, то переходим к следующему ответу
                         continue
-                if 'execute_errors' not in item and 'response' in item:
+                if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_users_info(item['response'])))
             await asyncio.gather(*save_tasks)
 
@@ -233,6 +223,8 @@ class AIOInfoGrabber:
             for item in results:
                 if item is not None:
                     save_tasks.append(asyncio.create_task(self.write_foaf(item)))
+                else:
+                    self.need_repeat = True
             await asyncio.gather(*save_tasks)
             await self.sessions['db'].commit()
 
@@ -267,7 +259,7 @@ class AIOInfoGrabber:
                         if error['error_code'] == 29:
                             limit_reached_here = True
                             self.limit_reached['groups'] = True
-                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                    if limit_reached_here:  # Если это была ошибка 29, то переходим к следующему ответу
                         continue
                 if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_groups(item['response'])))
@@ -305,7 +297,7 @@ class AIOInfoGrabber:
                         if error['error_code'] == 29:
                             limit_reached_here = True
                             self.limit_reached['groups'] = True
-                    if limit_reached_here:  # Если это была не ошибка 29, то продолжаем
+                    if limit_reached_here:  # Если это была ошибка 29, то переходим к следующему ответу
                         continue
                 if 'response' in item:
                     save_tasks.append(asyncio.create_task(self.write_posts(item['response'])))

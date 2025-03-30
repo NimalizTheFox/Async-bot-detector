@@ -63,12 +63,12 @@ class AioDBWorks:
 
     async def remove_from_all_tables(self, profile_id):
         """Удаляет пользователя из всех таблиц в БД для его переопределения"""
-        await self.session.execute(f'DELETE FROM users WHERE user_id = ?', profile_id)
-        await self.session.execute(f'DELETE FROM users_info_open WHERE user_id = ?', profile_id)
-        await self.session.execute(f'DELETE FROM users_info_close WHERE user_id = ?', profile_id)
-        await self.session.execute(f'DELETE FROM users_foaf WHERE user_id = ?', profile_id)
-        await self.session.execute(f'DELETE FROM users_groups WHERE user_id = ?', profile_id)
-        await self.session.execute(f'DELETE FROM users_posts WHERE user_id = ?', profile_id)
+        await self.session.execute(f'DELETE FROM users WHERE user_id = ?', (profile_id, ))
+        await self.session.execute(f'DELETE FROM users_info_open WHERE user_id = ?', (profile_id, ))
+        await self.session.execute(f'DELETE FROM users_info_close WHERE user_id = ?', (profile_id, ))
+        await self.session.execute(f'DELETE FROM users_foaf WHERE user_id = ?', (profile_id, ))
+        await self.session.execute(f'DELETE FROM users_groups WHERE user_id = ?', (profile_id, ))
+        await self.session.execute(f'DELETE FROM users_posts WHERE user_id = ?', (profile_id, ))
         await self.session.commit()
 
     async def create_tables(self):
