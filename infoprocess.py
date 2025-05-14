@@ -3,6 +3,7 @@ import configparser
 from math import ceil
 from AsyncAPI import AIOInfoGrabber
 from multiprocessing import Process, Manager
+import datetime
 
 
 def list_to_chunks(lst: list, n: int):
@@ -14,7 +15,7 @@ def list_to_chunks(lst: list, n: int):
 def get_proxys():
     """
     Чтение прокси из конфигурационного файла
-    :return: [[proxy_addr | None, (log, pass) | None], ]
+    :return: [[proxy_addr | None, (log, pass) | None] | None, ]
     """
     config = configparser.ConfigParser()
     config.read("settings.ini", encoding='utf-8')               # Читаем конфиг
@@ -55,8 +56,14 @@ def get_tokens():
     return tokens
 
 
+def get_current_time() -> str:
+    """Возвращает строку с текущим временем, нужно для логирования"""
+    cur_time = datetime.datetime.now()
+    return cur_time.strftime('%H:%M:%S')
+
+
 class InfoProcess:
-    """Класс для процесса сбора информации"""
+    """Класс для ПРОЦЕССА сбора информации"""
     def __init__(self, process_id: int,
                  max_process_id: int,
                  user_ids: list,
@@ -88,56 +95,70 @@ class InfoProcess:
         self.need_repeat = need_repeat
 
         while self.need_repeat.value == 1:
-            print(f'[INFO P_{self.process_id}] Ожидание начала сбора информации других процессов')
-            self.barrier.wait()     # Ожидание всех остальных процессов
-            self.informing(f'[INFO] Начинаем процесс сбора информации')
+            print(f'[{get_current_time()}][INFO P_{self.process_id}] Ожидание начала сбора информации других процессов')
+
+            # Ожидание пока все процессы достигнут этой точки кода
+            self.barrier.wait()
+            self.informing(f'[{get_current_time()}][INFO] Начинаем процесс сбора информации')
 
             if self.need_repeat.value == 1:
                 self.need_repeat.value = 0
 
+            # Запускаем нужные методы
+            # (для больших наборов советую только users, т.к. он не ограничен по кол-ву вызовов)
             self.grab_info_method('users')
-            # self.grab_info_foaf()     # FOAF БОЛЬШЕ НЕ РАБОТАЕТ
-            self.grab_info_method('groups')
-            self.grab_info_method('walls')
-            self.barrier.wait()     # Ожидание всех остальных процессов
+            # self.grab_info_foaf()             # FOAF БОЛЬШЕ НЕ РАБОТАЕТ
+            # self.grab_info_method('groups')   # Ограничение  ~800 id после чего блокируется метод
+            # self.grab_info_method('walls')    # Ограничение ~2000 id после чего блокируется метод
+
+            # Ожидание пока все процессы завершат сбор информации
+            self.barrier.wait()
 
             if self.need_repeat.value == 1:
-                self.informing(f'[INFO] Требуется повторение процесса сбора информации\n\n')
+                self.informing(f'[{get_current_time()}][INFO] Требуется повторение процесса сбора информации\n\n')
 
-    def grab_info_method(self, method):
+    def grab_info_method(self, method) -> None:
         """
-        Выбор метода сбора информации, после которого запускается конкурентный сбор данных через прокси процесса
+        Конкурентный сбор информации для каждого процесса через его прокси, в соответствии с выбранным методом
         :param method: метод сбора, может быть ТОЛЬКО 'users', 'groups', 'walls'
         """
-        self.barrier.wait()     # Ожидание всех остальных процессов
-        # Выделяем токены, которые могут взаимодействовать с выбранным методом
+        # Ждем пока все процессы достигнут этой точки
+        self.barrier.wait()
+
+        # Выделяем токены API, которые могут взаимодействовать с выбранным методом.
+        # То есть те, которые еще не достигли своего лимита в выбранном методе
         available_tokens = [key for key in self.tokens_dict.keys() if not self.tokens_dict[key][method]]
         if len(available_tokens) == 0:
-            self.informing(f'[ERROR] Все токены ограничены в методе {method}!'
+            self.informing(f'[{get_current_time()}][ERROR] Все токены ограничены в методе {method}!'
                            f'\n\tПроцесс сбора продолжится, но этот метод не будет собран до конца')
-        elif self.process_id < len(available_tokens):
-            # Делим список пользователей между процессами
-            users_chunks = list_to_chunks(self.user_id_list, min(self.max_id, len(available_tokens)))
-            my_token = available_tokens[self.process_id]    # Записываем токен для использования методом
-            my_users = users_chunks[self.process_id]        # Записываем список пользователей для использования методом
 
-            # Время ожидания завершения метода
+        # Если доступных токенов осталось меньше, чем процессов, то оставшиеся процессы бездействуют
+        elif self.process_id < len(available_tokens):
+            # Делим список пользователей между процессами или по количеству доступных токенов, смотря чего меньше
+            users_chunks = list_to_chunks(self.user_id_list, min(self.max_id, len(available_tokens)))
+            current_process_token = available_tokens[self.process_id]    # Записываем токен для использования методом
+            current_process_users = users_chunks[self.process_id]        # Записываем список пользователей для метода
+
+            # Считаем примерное время ожидания завершения метода (при первоначальном запуске)
+            # Кол-во пользователей, которое может обработать метод за минуту
             count_users_method = {'users': 6525, 'groups': 6575, 'walls': 2380}
-            time_to_wait = int((len(my_users) / count_users_method[method]) * 2) + 1
-            self.informing(f'[INFO] Собираем информацию по методу {method}, время ожидания ~{time_to_wait} мин.')
+            time_to_wait = int((len(current_process_users) / count_users_method[method]) * 2) + 1
+            self.informing(f'[{get_current_time()}][INFO] Собираем информацию по '
+                           f'методу {method}, время полного сбора ~{time_to_wait} мин.')
 
             # Запускаем конкурентный сбор данных по пользователям с использованием переменных процесса
             limits, need_repeat_from_method = asyncio.run(AIOInfoGrabber(
-                my_users, self.data_folder, my_token, self.proxy, self.proxy_auth).start(method))
+                current_process_users, self.data_folder, current_process_token, self.proxy, self.proxy_auth,
+                True if self.process_id == 0 else False).start(method))
 
-            # Если после выполнения метода нужно повторной собрать информацию
+            # Если после выполнения метода нужно повторно собрать информацию
             if need_repeat_from_method and self.need_repeat.value == 0:
                 self.need_repeat.value = 1
 
             # Если лимиты изменились, то прописываем их
             for limit_name in limits.keys():
                 if limits[limit_name]:  # Если лимит сменился на True, то применяем его
-                    self.tokens_dict[my_token][limit_name] = limits[limit_name]
+                    self.tokens_dict[current_process_token][limit_name] = limits[limit_name]
 
     def grab_info_foaf(self):
         # Делим список пользователей между процессами
@@ -146,7 +167,7 @@ class InfoProcess:
 
         # Время ожидания завершения метода
         time_to_wait = int((len(my_users) / 27000) * 2) + 1
-        self.informing(f'[INFO] Собираем информацию по методу foaf, время ожидания ~{time_to_wait} мин.')
+        self.informing(f'[{get_current_time()}][INFO] Собираем информацию по методу foaf, время ожидания ~{time_to_wait} мин.')
 
         # Запускаем конкурентный сбор данных по пользователям с использованием переменных процесса
         _, need_repeat_from_method = asyncio.run(AIOInfoGrabber(
@@ -160,7 +181,12 @@ class InfoProcess:
             print(message)
 
 
-def take_data(all_ids: list, data_folder: str):
+def take_data(all_ids: list, data_folder: str) -> None:
+    """
+    Создание и запуск Процессов для сбора информации пользователей
+    :param all_ids: Список со всеми id, у которых нужно собрать информацию.
+    :param data_folder: Папка, в которую помещается БД с данными анализа
+    """
     manager = Manager()         # Менеджер управления данными для процессов
 
     proxys = get_proxys()       # Забираем все прокси
@@ -172,7 +198,7 @@ def take_data(all_ids: list, data_folder: str):
         tokens[key] = manager.dict({'users': False, 'groups': False, 'walls': False})
 
     process_number = min(len(proxys), len(token_keys))  # Кол-во процессов
-    barrier = manager.Barrier(process_number)           # Блокиратор для синхронизации потоков
+    barrier = manager.Barrier(process_number)           # Блокиратор для синхронизации процессов
     need_repeat_val = manager.Value('i', 1)             # Переменная для повторения
 
     # Создание процессов сбора информации
