@@ -15,14 +15,41 @@ class AioDBWorks:
         self.session = await aiosqlite.connect(self.db_file)
 
     async def save_db(self):
-        """Сохранение БД"""
+        """Сохранение БД, вынесено в отдельную функцию, чтоб сохранять БД после раундов"""
         await self.session.commit()
 
-    async def get_data_in_list(self, request):
-        db_response = await self.session.execute(request)   # Отправка запроса к БД и ожидание ответа
-        result = await db_response.fetchall()               # Преобразование ответа в список кортежей
-        result_list = [item[0] for item in result]          # Преобразование в удобочитаемый список
-        return result_list
+    async def get_data_in_list(self, request: str):
+        async with self.session.cursor() as curr:
+            db_response = await curr.execute(request)   # Отправка запроса к БД и ожидание ответа
+            result = await db_response.fetchall()               # Преобразование ответа в список кортежей
+            result_list = [item[0] for item in result]          # Преобразование в удобочитаемый список
+            return result_list
+
+    async def get_checked_profiles(self):
+        """Возвращает все id, которые уже записаны в БД"""
+        return await self.get_data_in_list('SELECT user_id FROM users')
+
+    async def get_profiles_to_group_check(self):
+        """Возвращает id профилей, у которых еще не проверены группы """
+        return await self.get_data_in_list(
+            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
+
+    async def get_profiles_to_wall_check(self):
+        """Возвращает id профилей, у которых еще не проверена стена """
+        return await self.get_data_in_list(
+            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+
+    async def get_all_profiles_info(self):
+        close_profiles = await self.get_data_in_list(
+            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 1')
+        close_info = await self.get_data_in_list(
+            'SELECT user_id FROM users_info_close')
+        open_profiles = await self.get_data_in_list(
+            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0')
+        open_info = await self.get_data_in_list(
+            'SELECT user_id FROM users_info_open')
+        return close_profiles, close_info, open_profiles, open_info
+
 
     async def save_user_result(self, data):
         """Сохраняет первоначальные данные о пользователе, то есть его id, удален ли он и закрыт ли"""

@@ -1,6 +1,5 @@
 import asyncio
 import aiohttp
-import aiosqlite
 import datetime
 import math
 from aiohttp import ClientSession, ClientTimeout
@@ -34,9 +33,9 @@ class AIOInfoGrabber:
         """
         self.all_users_id = sorted(list(set([int(item) for item in users])))
         self.data_folder = data_folder
-        self.sessions = {}
         self.proxy = proxy
         self.proxy_auth = proxy_auth
+        self.requests_session: ClientSession | None = None
         self.db_worker: AioDBWorks | None = None
         self.need_print = need_prints
 
@@ -98,17 +97,18 @@ class AIOInfoGrabber:
         # Разные подключения
         # Если есть прокси, то
         proxy_auth = aiohttp.BasicAuth(self.proxy_auth[0], self.proxy_auth[1]) if self.proxy_auth is not None else None
-        self.sessions['vk'] = ClientSession(timeout=ClientTimeout(total=30), proxy=self.proxy, proxy_auth=proxy_auth)
-        self.sessions['db'] = aiosqlite.connect(fr'{self.data_folder}\data.db')
+        self.requests_session = ClientSession(timeout=ClientTimeout(total=30), proxy=self.proxy, proxy_auth=proxy_auth)
 
-        async with self.sessions['vk'], self.sessions['db']:
-            self.db_worker = AioDBWorks(self.sessions['db'])
-            await self.db_worker.create_tables()    # Создаем БД и таблички
+        self.db_worker = AioDBWorks(fr'{self.data_folder}\data.db')
+        await self.db_worker.connect()
+        await self.db_worker.create_tables()
 
+        # Используем одну сессию для всех запросов, так как это быстрее
+        async with self.requests_session:
             # === ПОЛЬЗОВАТЕЛИ ===
             if method == 'users':
                 # Смотрим какие пользователи уже проверены и непроверенных проверяем
-                checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
+                checked_users = await self.db_worker.get_checked_profiles()
                 unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                 if self.need_print:
                     print(f'\tВсего: {len(self.all_users_id)}, '
@@ -116,7 +116,7 @@ class AIOInfoGrabber:
                           f'Осталось: {len(unchecked_users)}')
                 while len(unchecked_users) != 0 and not self.limit_reached['users']:
                     await self.users_info_process(unchecked_users)    # Сбор данных из сети
-                    checked_users = await self.db_worker.get_data_in_list('SELECT DISTINCT user_id FROM users')
+                    checked_users = await self.db_worker.get_checked_profiles()
                     unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                     if self.need_print:
                         print(f'\tВсего: {len(self.all_users_id)}, '
@@ -127,15 +127,12 @@ class AIOInfoGrabber:
 
             # === ГРУППЫ ===
             elif method == 'groups':
-                ids_to_groups = await self.db_worker.get_data_in_list(
-                    'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
+                ids_to_groups = await self.db_worker.get_profiles_to_group_check()
                 if self.need_print:
                     print(f'\tПредстоит проверить группы у {len(ids_to_groups)} пользователей')
                 while len(ids_to_groups) != 0 and not self.limit_reached['groups']:
                     await self.groups_process(ids_to_groups)
-                    ids_to_groups = await self.db_worker.get_data_in_list(
-                        'SELECT DISTINCT user_id FROM users '
-                        'WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
+                    ids_to_groups = await self.db_worker.get_profiles_to_group_check()
                     if self.need_print:
                         print(f'\tПредстоит проверить группы у {len(ids_to_groups)} пользователей')
                 if len(ids_to_groups) != 0:
@@ -143,14 +140,12 @@ class AIOInfoGrabber:
 
             # === ПОСТЫ ===
             elif method == 'walls':
-                ids_to_posts = await self.db_worker.get_data_in_list(
-                    'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+                ids_to_posts = await self.db_worker.get_profiles_to_wall_check()
                 if self.need_print:
                     print(f'\tПредстоит проверить посты у {len(ids_to_posts)} пользователей')
                 while len(ids_to_posts) != 0 and not self.limit_reached['walls']:
                     await self.posts_process(ids_to_posts)
-                    ids_to_posts = await self.db_worker.get_data_in_list(
-                        'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
+                    ids_to_posts = await self.db_worker.get_profiles_to_wall_check()
                     if self.need_print:
                         print(f'\tПредстоит проверить посты у {len(ids_to_posts)} пользователей')
                 if len(ids_to_posts) != 0:
@@ -213,14 +208,7 @@ class AIOInfoGrabber:
         # Иногда БД капризничает и не записывает некоторые профили в таблички, так что перепроверяем.
         # (Это было один раз и я не уверен с чем это было связано, но на всякий случай оставлю)
         # Собираем из БД информацию по закрытым и открытым профилям
-        close_profiles = await self.db_worker.get_data_in_list(
-            'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 1')
-        close_info = await self.db_worker.get_data_in_list(
-            'SELECT DISTINCT user_id FROM users_info_close')
-        open_profiles = await self.db_worker.get_data_in_list(
-            'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND is_close = 0')
-        open_info = await self.db_worker.get_data_in_list(
-            'SELECT DISTINCT user_id FROM users_info_open')
+        close_profiles, close_info, open_profiles, open_info = await self.db_worker.get_all_profiles_info()
 
         # Если профиль есть в списке профилей, но по неу нет информации, то его нужно перепроверить
         to_recheck = sorted(list(set(close_profiles) - set(close_info)) + list(set(open_profiles) - set(open_info)))
@@ -231,7 +219,7 @@ class AIOInfoGrabber:
             # print(f'\t[{get_current_time()}] Нужно перепроверить {len(to_recheck)} профилей')
         for item in to_recheck:
             await self.db_worker.remove_from_all_tables(int(item))
-        await self.sessions['db'].commit()
+        await self.db_worker.save_db()
 
     async def groups_process(self, users_id):
         """Разбитие на раунды сохранения и выполнение сбора информации по группам пользователей"""
@@ -352,7 +340,7 @@ class AIOInfoGrabber:
         params = {'users_id': users, 'fields': self.fields_str, 'access_token': self.access_token, 'v': self.version}
 
         # Отправляем запрос к API и ждем ответа
-        async with self.sessions['vk'].post(url=self.users_info_url, params=params) as response:
+        async with self.requests_session.post(url=self.users_info_url, params=params) as response:
             translate_json = await response.json()  # Преобразуем ответ в понятный словарь
             return translate_json
 
@@ -368,7 +356,7 @@ class AIOInfoGrabber:
         await asyncio.sleep(0.4)
         my_event.set()
         params = {'users_id': users, 'access_token': self.access_token, 'v': self.version}
-        async with self.sessions['vk'].post(url=self.users_groups_url, params=params) as response:
+        async with self.requests_session.post(url=self.users_groups_url, params=params) as response:
             translate_json = await response.json()
             return translate_json
 
@@ -384,7 +372,7 @@ class AIOInfoGrabber:
         await asyncio.sleep(0.4)
         my_event.set()
         params = {'users_id': users, 'access_token': self.access_token, 'v': self.version}
-        async with self.sessions['vk'].post(url=self.users_wall_url, params=params) as response:
+        async with self.requests_session.post(url=self.users_wall_url, params=params) as response:
             translate_json = await response.json()
             return translate_json
 
@@ -520,7 +508,7 @@ class AIOInfoGrabber:
                 await self.db_worker.save_close_profile_data(save_values)       # Записываем конкретно для закрытого
 
             # И запоминаем изменения в БД
-            await self.sessions['db'].commit()
+            await self.db_worker.save_db()
 
     async def write_groups(self, results: list):
         """Сохраняет данные об группах пользователей в БД"""
@@ -534,8 +522,7 @@ class AIOInfoGrabber:
                 await self.db_worker.update_user_group(item)
                 save_values = await self.group_data_analyse(item)
                 await self.db_worker.save_group_data(save_values)
-            await self.sessions['db'].commit()
-            print('сохранено')
+            await self.db_worker.save_db()
 
     async def write_posts(self, results: list):
         """Сохраняет данные об постах пользователей в БД"""
@@ -549,7 +536,7 @@ class AIOInfoGrabber:
                 await self.db_worker.update_user_wall(item)
                 save_values = await self.wall_data_analyse(item)
                 await self.db_worker.save_wall_data(save_values)
-            await self.sessions['db'].commit()
+            await self.db_worker.save_db()
 
 
 def main():
