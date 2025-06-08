@@ -40,6 +40,7 @@ class AioDBWorks:
             'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
 
     async def get_all_profiles_info(self):
+        """Собирает все данные по всем профилям (и только профилям, без групп и стен)"""
         close_profiles = await self.get_data_in_list(
             'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 1')
         close_info = await self.get_data_in_list(
@@ -49,7 +50,6 @@ class AioDBWorks:
         open_info = await self.get_data_in_list(
             'SELECT user_id FROM users_info_open')
         return close_profiles, close_info, open_profiles, open_info
-
 
     async def save_user_result(self, data):
         """Сохраняет первоначальные данные о пользователе, то есть его id, удален ли он и закрыт ли"""
@@ -64,7 +64,7 @@ class AioDBWorks:
         """Сохраняет упорядоченные данные об открытом профиле в БД"""
         async with self.session.cursor() as curr:
             await curr.execute(  # Сохраняем в БД
-                f'INSERT INTO users_info_open VALUES({", ".join(["?" for _ in range(47)])})', data)
+                f'INSERT INTO users_info_open VALUES({", ".join(["?" for _ in range(46)])})', data)
 
     async def save_close_profile_data(self, data):
         """Сохраняет упорядоченные данные о закрытом профиле в БД"""
@@ -152,7 +152,7 @@ class AioDBWorks:
                 (
                     user_id INTEGER PRIMARY KEY, --ID пользователя
                     --Заполнители профиля, только 0 или 1
-                    about INTEGER, activities INTEGER, books INTEGER, career INTEGER, city INTEGER, country INTEGER,
+                    about INTEGER, activities INTEGER, books INTEGER, career INTEGER, city INTEGER,
                     has_photo INTEGER, has_mobile INTEGER, home_town INTEGER, schools INTEGER, status INTEGER, 
                     games INTEGER, interests INTEGER, military INTEGER, movies INTEGER, music INTEGER,
                     occupation INTEGER, personal INTEGER, quotes INTEGER, relation INTEGER, universities INTEGER,

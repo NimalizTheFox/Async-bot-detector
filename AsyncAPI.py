@@ -66,7 +66,7 @@ class AIOInfoGrabber:
         self.need_repeat = False
 
         # Запрос полей для API, а так же заполнители профиля у открытых
-        fields_list = ["user_id", "about", "activities", "books", "career", "city", "country",
+        fields_list = ["user_id", "about", "activities", "books", "career", "city",
                        "has_photo", "has_mobile", "home_town", "schools", "status",
                        "games", "interests", "military", "movies", "music", "occupation", "personal",
                        "quotes", "relation", "universities", "screen_name", "verified", "counters"]
@@ -507,7 +507,9 @@ class AIOInfoGrabber:
                 save_values = await self.user_data_analyse(item, self.close_fillers_list, self.close_counters_list)
                 await self.db_worker.save_close_profile_data(save_values)       # Записываем конкретно для закрытого
 
-            # И запоминаем изменения в БД
+            # Сохраняем БД только сейчас, чтобы при ошибке запись об этом профиле полностью отсутствовала
+            # Это позволит легко найти непроверенные или профили с ошибкой
+            # + немного оптимизации, так как это одно сохранение вместо двух
             await self.db_worker.save_db()
 
     async def write_groups(self, results: list):

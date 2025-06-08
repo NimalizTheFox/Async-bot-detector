@@ -1,9 +1,10 @@
+import os
 import asyncio
+import datetime
 import configparser
 from math import ceil
 from AsyncAPI import AIOInfoGrabber
 from multiprocessing import Process, Manager
-import datetime
 
 
 def list_to_chunks(lst: list, n: int):
@@ -71,8 +72,8 @@ class InfoProcess:
                  data_folder: str,
                  proxy: str | None,
                  proxy_auth: list[str, str] | None,
-                 barrier,
-                 need_repeat):
+                 barrier: Manager.Barrier,
+                 need_repeat: int):
         """
         :param process_id: Номер процесса
         :param max_process_id: Сколько всего процессов
@@ -180,7 +181,11 @@ def take_data(all_ids: list, data_folder: str) -> None:
     for key in token_keys:
         tokens[key] = manager.dict({'users': False, 'groups': False, 'walls': False})
 
-    process_number = min(len(proxys), len(token_keys))  # Кол-во процессов
+    # Узнаем сколько потоков мы можем задействовать (если не можем узнать, то 8)
+    cores_num = os.cpu_count()
+    cores_num = 8 if cores_num is None else cores_num
+
+    process_number = min(len(proxys), len(token_keys), cores_num)  # Кол-во процессов
     barrier = manager.Barrier(process_number)           # Блокиратор для синхронизации процессов
     need_repeat_val = manager.Value('i', 1)             # Переменная для повторения
 
