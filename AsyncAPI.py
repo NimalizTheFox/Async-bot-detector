@@ -2,15 +2,10 @@ import asyncio
 import aiohttp
 import aiosqlite
 import datetime
-import lxml
 import math
-import warnings
 from aiohttp import ClientSession, ClientTimeout
-from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 from statistics import fmean, median
 from DBWorks import AioDBWorks
-
-warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
 
 def get_current_time() -> str:
@@ -46,21 +41,18 @@ class AIOInfoGrabber:
         self.need_print = need_prints
 
         # Сколько запросов к API сделать за backup_seconds секунд
-        # Задержка ответа на запрос о пользователях - 5 секунд, группах - 4 секунды, постах - 15 секунд, foaf - 0.6
+        # Задержка ответа на запрос о пользователях - 5 секунд, группах - 4 секунды, постах - 15 секунд
         # Оставляется 10% на погрешность
         # Потом делим на 0.4 секунды, которые нужны чтобы API не заблокировался,
-        # для foaf - 0.004, так как он не связан с API и может отвечать чаще
         # Все значения для стандартного значения в 120 секунд
         self.user_info_rounds = int((round_seconds - 5) / 1.1 / 0.4)    # 261 пакет id, по 25, всего 6 525 id
         self.group_rounds = int((round_seconds - 4) / 1.1 / 0.4)        # 263 пакета id, по 25, всего 6 575 id
         self.wall_rounds = int((round_seconds - 15) / 1.1 / 0.4)        # 238 покетов id, по 10, всего 2 380 id
-        self.foaf_rounds = int((round_seconds - 0.6) / 1.1 / 0.004)     # 27 136 id
 
         # Ссылки на методы для сбора информации
         self.users_info_url = 'https://api.vk.com/method/execute.users_info'
         self.users_groups_url = 'https://api.vk.com/method/execute.groups_info'
         self.users_wall_url = 'https://api.vk.com/method/execute.walls_info'
-        self.foaf_url = 'https://vk.com/foaf.php'
 
         # Данные для API
         self.access_token = access_token
@@ -97,10 +89,10 @@ class AIOInfoGrabber:
         """
         ВЫПОЛНЯТЬ С ПОМОЩЬЮ asyncio.run(AIOInfoGrabber(*).start(method))!
         Выполняет сбор информации по выбранному методу.
-        :param method: 'users', 'foaf', 'groups' и 'walls', только они.
+        :param method: 'users', 'groups' и 'walls', только они.
         :return: Словарь лимитов и нужен ли повтор
         """
-        if method not in ['users', 'foaf', 'groups', 'walls']:
+        if method not in ['users', 'groups', 'walls']:
             raise Exception('Некорректно указанный метод для AIOInfoGrabber(*).start(method)')
 
         # Разные подключения
@@ -131,21 +123,6 @@ class AIOInfoGrabber:
                               f'Проверенно: {len(checked_users)}, '
                               f'Осталось: {len(unchecked_users)}')
                 if len(unchecked_users) != 0:
-                    self.need_repeat = True
-
-            # === FOAF ===
-            elif method == 'foaf':
-                ids_to_foaf = await self.db_worker.get_data_in_list(
-                    'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
-                if self.need_print:
-                    print(f'\tПредстоит проверить с помощью foaf: {len(ids_to_foaf)}')
-                while len(ids_to_foaf) != 0:
-                    await self.foaf_process(ids_to_foaf)
-                    ids_to_foaf = await self.db_worker.get_data_in_list(
-                        'SELECT DISTINCT user_id FROM users WHERE deactivated = 0 AND foaf_checked = 0')
-                    if self.need_print:
-                        print(f'\tПредстоит проверить с помощью foaf: {len(ids_to_foaf)}')
-                if len(ids_to_foaf) != 0:
                     self.need_repeat = True
 
             # === ГРУППЫ ===
@@ -255,34 +232,6 @@ class AIOInfoGrabber:
         for item in to_recheck:
             await self.db_worker.remove_from_all_tables(int(item))
         await self.sessions['db'].commit()
-
-    async def foaf_process(self, users_id):
-        """Разбитие на раунды сохранения и выполнение сбора информации по датам"""
-        start_event = asyncio.Event()
-        start_event.set()
-
-        # Собираем раунды со списками id пользователей
-        info_rounds = self.list_split(users_id, self.foaf_rounds)  # И разбиваем по раундам сохранения
-
-        for round_ids in info_rounds:  # Примерно по две минуты на раунд
-            events = [asyncio.Event() for _ in range(len(round_ids))]  # Создаем события для каждого потока
-            # Создаем задачи для каждого потока
-            tasks = [asyncio.create_task(self.foaf_request(round_ids[0], start_event, events[0]))]
-            for i in range(1, len(round_ids)):
-                tasks.append(asyncio.create_task(self.foaf_request(round_ids[i], events[i - 1], events[i])))
-
-            # Запускаем задачи
-            results = await asyncio.gather(*tasks)
-
-            # Сохраняем результаты
-            save_tasks = []
-            for item in results:
-                if item is not None:
-                    save_tasks.append(asyncio.create_task(self.write_foaf(item)))
-                else:
-                    self.need_repeat = True
-            await asyncio.gather(*save_tasks)
-            await self.sessions['db'].commit()
 
     async def groups_process(self, users_id):
         """Разбитие на раунды сохранения и выполнение сбора информации по группам пользователей"""
@@ -406,43 +355,6 @@ class AIOInfoGrabber:
         async with self.sessions['vk'].post(url=self.users_info_url, params=params) as response:
             translate_json = await response.json()  # Преобразуем ответ в понятный словарь
             return translate_json
-
-    async def foaf_request(self, user: int, wait_event: asyncio.Event, my_event: asyncio.Event):
-        """
-        Запрос данных о времени создания профиля и времени последнего захода
-        :param user: id пользователя, которого нужно проверить.
-        :param wait_event: Событие, которого ждет процедура, чтобы отправить запрос.
-        :param my_event: Событие, в котором процедура сообщает, что запрос отправлен.
-        :return: Словарь с ответом от FOAF
-        """
-        await wait_event.wait()
-        await asyncio.sleep(0.0)    # Так нужно
-        my_event.set()
-
-        async with self.sessions['vk'].get(url=self.foaf_url, params={'id': user}) as response:
-            src = await response.text()
-            soup = BeautifulSoup(src, "lxml")
-            today = datetime.datetime.now()
-
-            # Достаем дату создания профиля (её нет только у удаленных профилей)
-            try:
-                create_date = soup.find("ya:created").get("dc:date")
-                create_date = datetime.datetime.strptime(create_date.split("T")[0], "%Y-%m-%d")
-                life_time = (today - create_date).days
-            except:
-                # На случай если профиль удалили, пока собирали информацию
-                await self.db_worker.remove_from_all_tables(int(user))
-                return None
-
-            # Достаем время последнего захода
-            try:
-                last_logged = soup.find("ya:lastloggedin").get("dc:date")  # Не всегда есть
-                last_logged = datetime.datetime.strptime(last_logged.split("T")[0], "%Y-%m-%d")
-                last_log_time = (today - last_logged).days
-            except:
-                last_log_time = 60
-
-            return {'id': user, 'life_time': life_time, 'last_log_time': last_log_time}
 
     async def groups_request(self, users: str, wait_event: asyncio.Event, my_event: asyncio.Event):
         """
@@ -610,11 +522,6 @@ class AIOInfoGrabber:
             # И запоминаем изменения в БД
             await self.sessions['db'].commit()
 
-    async def write_foaf(self, result: dict):
-        """Записывает данные foaf в БД"""
-        # Не спрашивай почему тут так мало. Так надо
-        await self.db_worker.save_and_update_foaf_data(result)
-
     async def write_groups(self, results: list):
         """Сохраняет данные об группах пользователей в БД"""
         for item in results:
@@ -643,9 +550,6 @@ class AIOInfoGrabber:
                 save_values = await self.wall_data_analyse(item)
                 await self.db_worker.save_wall_data(save_values)
             await self.sessions['db'].commit()
-
-
-
 
 
 def main():

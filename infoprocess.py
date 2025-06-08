@@ -107,7 +107,6 @@ class InfoProcess:
             # Запускаем нужные методы
             # (для больших наборов советую только users, т.к. он не ограничен по кол-ву вызовов)
             self.grab_info_method('users')
-            # self.grab_info_foaf()             # FOAF БОЛЬШЕ НЕ РАБОТАЕТ
             # self.grab_info_method('groups')   # Ограничение  ~800 id после чего блокируется метод
             # self.grab_info_method('walls')    # Ограничение ~2000 id после чего блокируется метод
 
@@ -159,22 +158,6 @@ class InfoProcess:
             for limit_name in limits.keys():
                 if limits[limit_name]:  # Если лимит сменился на True, то применяем его
                     self.tokens_dict[current_process_token][limit_name] = limits[limit_name]
-
-    def grab_info_foaf(self):
-        # Делим список пользователей между процессами
-        users_chunks = list_to_chunks(self.user_id_list, self.max_id)
-        my_users = users_chunks[self.process_id]  # Записываем список пользователей для использования методом
-
-        # Время ожидания завершения метода
-        time_to_wait = int((len(my_users) / 27000) * 2) + 1
-        self.informing(f'[{get_current_time()}][INFO] Собираем информацию по методу foaf, время ожидания ~{time_to_wait} мин.')
-
-        # Запускаем конкурентный сбор данных по пользователям с использованием переменных процесса
-        _, need_repeat_from_method = asyncio.run(AIOInfoGrabber(
-            my_users, self.data_folder, '', self.proxy, self.proxy_auth).start('foaf'))
-
-        if need_repeat_from_method and self.need_repeat.value == 0:
-            self.need_repeat.value = 1
 
     def informing(self, message):
         if self.process_id == 0:
