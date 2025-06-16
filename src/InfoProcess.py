@@ -1,60 +1,17 @@
 import os
 import asyncio
 import datetime
-import configparser
 from math import ceil
-from AsyncAPI import AIOInfoGrabber
 from multiprocessing import Process, Manager
+
+from src.AsyncAPI import AIOInfoGrabber
+from src.ConfigWorks import get_proxys, get_tokens
 
 
 def list_to_chunks(lst: list, n: int):
     """Разделяет список на n частей"""
     size = ceil(len(lst) / n)
     return list(map(lambda x: lst[x * size:x * size + size], list(range(n))))
-
-
-def get_proxys():
-    """
-    Чтение прокси из конфигурационного файла
-    :return: [[proxy_addr | None, (log, pass) | None] | None, ]
-    """
-    config = configparser.ConfigParser()
-    config.read("settings.ini", encoding='utf-8')               # Читаем конфиг
-    proxys_strs = config['PROXY']['proxy'].strip().split('\n')  # Читаем строку прокси из конфига
-    separator = config['PROXY']['separator']                    # И разделитель для логина и пароля
-
-    if proxys_strs == ['']:     # Если список прокси пуст
-        return [[None, None]]   # То возвращается адрес оригинальной машины
-
-    proxy_full = []
-    for proxys_str in proxys_strs:
-        pp = proxys_str.strip().split(separator)
-        if len(pp) > 1:         # Если есть разделитель в строке прокси
-            if len(pp) < 3:     # Смотрим есть ли логин И пароль
-                raise Exception(f'Нет логина или пароля у прокси [{pp[0]}]!')
-            elif len(pp) > 3:   # Тут было бы что-то странное
-                raise Exception(f'Слишком много разделителей у прокси [{pp[0]}]!')
-            log_pass = (pp[1], pp[2])       # Если есть, то вносим их
-        else:
-            log_pass = None                 # Если нет, то вносим None
-        proxy_full.append([pp[0], log_pass])
-    if int(config['PROXY']['use_original_address']) == 1:   # Если нужно использовать адрес оригинальной машины
-        proxy_full.append([None, None])                     # То добавляем его в список
-    return proxy_full
-
-
-def get_tokens():
-    """
-    Чтение токенов API
-    :return: [API_Token, ]
-    """
-    config = configparser.ConfigParser()
-    config.read("settings.ini", encoding='utf-8')  # Читаем конфиг
-    tokens = config['VK']['access_token'].strip().split('\n')
-
-    if len(tokens) == 0:
-        raise Exception('Необходимо указать как минимум один токен API в конфигурационном файле (settings.ini)!')
-    return tokens
 
 
 def get_current_time() -> str:
@@ -72,7 +29,7 @@ class InfoProcess:
                  data_folder: str,
                  proxy: str | None,
                  proxy_auth: list[str, str] | None,
-                 barrier: Manager.Barrier,
+                 barrier,
                  need_repeat: int):
         """
         :param process_id: Номер процесса
@@ -96,7 +53,7 @@ class InfoProcess:
         self.need_repeat = need_repeat
 
         while self.need_repeat.value == 1:
-            print(f'[{get_current_time()}][INFO P_{self.process_id}] Ожидание начала сбора информации других процессов')
+            print(f'[{get_current_time()}][INFO P_{self.process_id}] Ожидание запуска других процессов')
 
             # Ожидание пока все процессы достигнут этой точки кода
             self.barrier.wait()
@@ -144,7 +101,7 @@ class InfoProcess:
             count_users_method = {'users': 6525, 'groups': 6575, 'walls': 2380}
             time_to_wait = int((len(current_process_users) / count_users_method[method]) * 2) + 1
             self.informing(f'[{get_current_time()}][INFO] Собираем информацию по '
-                           f'методу {method}, время полного сбора ~{time_to_wait} мин.')
+                           f'методу {method}, время сбора с нуля: ~{time_to_wait} мин.')
 
             # Запускаем конкурентный сбор данных по пользователям с использованием переменных процесса
             limits, need_repeat_from_method = asyncio.run(AIOInfoGrabber(

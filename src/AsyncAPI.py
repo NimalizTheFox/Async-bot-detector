@@ -4,7 +4,7 @@ import datetime
 import math
 from aiohttp import ClientSession, ClientTimeout
 from statistics import fmean, median
-from DBWorks import AioDBWorks
+from src.DBWorks import AioDBWorks
 
 
 def get_current_time() -> str:
@@ -151,8 +151,10 @@ class AIOInfoGrabber:
                 if len(ids_to_posts) != 0:
                     self.need_repeat = True
 
-            # Возврааем словарь достигнутых лимитов и нужно ли повторение
-            return self.limit_reached, self.need_repeat
+        await self.db_worker.close()
+
+        # Возврааем словарь достигнутых лимитов и нужно ли повторение
+        return self.limit_reached, self.need_repeat
 
     # ========== ПРОЦЕССЫ ДЛЯ ОБРАБОТКИ API ==========
     async def users_info_process(self, users_id):

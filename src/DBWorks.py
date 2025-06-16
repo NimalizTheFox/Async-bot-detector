@@ -14,6 +14,9 @@ class AioDBWorks:
         """Соединение с БД"""
         self.session = await aiosqlite.connect(self.db_file)
 
+    async def close(self):
+        await self.session.close()
+
     async def save_db(self):
         """Сохранение БД, вынесено в отдельную функцию, чтоб сохранять БД после раундов"""
         await self.session.commit()
@@ -50,6 +53,36 @@ class AioDBWorks:
         open_info = await self.get_data_in_list(
             'SELECT user_id FROM users_info_open')
         return close_profiles, close_info, open_profiles, open_info
+
+    async def get_batched_data(self, is_close: bool, batch_size=1000):
+        """Генератор, который выдает по batch_size записей из нужной таблицы"""
+        last_id = 0
+        async with self.session.cursor() as curr:
+            while True:
+                await curr.execute(f"""
+                    SELECT * FROM users_info_{'close' if is_close else 'open'} 
+                    WHERE user_id > ? 
+                    ORDER BY user_id 
+                    LIMIT ?
+                """, (last_id, batch_size))
+
+                batch = await curr.fetchall()
+                if not batch:
+                    return
+
+                last_id = batch[-1][0]  # Запоминаем последний ID
+                yield batch
+
+    async def save_analyse_result(self, data: list):
+        async with self.session.cursor() as curr:
+            for item in data:
+                await curr.execute("""
+                    INSERT INTO results (user_id, bot_prob)
+                    VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET
+                        bot_prob = excluded.bot_prob
+                    """, item)
+            await self.session.commit()
 
     async def save_user_result(self, data):
         """Сохраняет первоначальные данные о пользователе, то есть его id, удален ли он и закрыт ли"""
@@ -104,6 +137,7 @@ class AioDBWorks:
             await curr.execute(f'DELETE FROM users_info_close WHERE user_id = ?', (profile_id, ))
             await curr.execute(f'DELETE FROM users_groups WHERE user_id = ?', (profile_id, ))
             await curr.execute(f'DELETE FROM users_posts WHERE user_id = ?', (profile_id, ))
+            await curr.execute(f'DELETE FROM results WHERE user_id = ?', (profile_id, ))
 
             await self.session.commit()
 
@@ -206,6 +240,17 @@ class AioDBWorks:
                     min_views INTEGER, max_views INTEGER, avg_views REAL, mid_views INTEGER, --Стат по просмотрам
                     min_reposts INTEGER, max_reposts INTEGER, avg_reposts REAL, mid_reposts INTEGER, --Стат по репостам
                     posts_with_text_rel REAL --Отношение постов с текстами ко всем 
+                );
+                """
+            )
+
+            # Таблица для записи результатов анализа
+            await curr.execute(
+                """
+                CREATE TABLE IF NOT EXISTS results
+                (
+                    user_id INTEGER PRIMARY KEY,
+                    bot_prob REAL --Вероятность того, что профиль - бот
                 );
                 """
             )
