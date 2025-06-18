@@ -1,25 +1,24 @@
 import json
 import configparser
-
-config_path = 'settings.ini'
+from .paths import CONFIG_FILE
 
 
 def write_tokens(tokens: list[str]) -> None:
     """Записывает список с токенами в конфиг"""
     config = configparser.ConfigParser()
-    config.read(config_path, encoding='utf-8')
+    config.read(CONFIG_FILE, encoding='utf-8')
 
     tokens = list(set(tokens))
 
     config.set('VK', 'access_token', json.dumps(tokens))
-    with open(config_path, 'w', encoding='utf-8') as file:
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as file:
         config.write(file)
 
 
 def write_proxy(proxies: list[list[str | None, list | None]]) -> None:
     """Записывает список с прокси (и их логином/паролем) в конфиг"""
     config = configparser.ConfigParser()
-    config.read(config_path, encoding='utf-8')
+    config.read(CONFIG_FILE, encoding='utf-8')
 
     # Избавляемся от дубликатов и адреса оригинальной машины
     uniques_proxies = []
@@ -29,14 +28,14 @@ def write_proxy(proxies: list[list[str | None, list | None]]) -> None:
     proxies = uniques_proxies
 
     config.set('PROXY', 'proxy', json.dumps(proxies))
-    with open(config_path, 'w', encoding='utf-8') as file:
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as file:
         config.write(file)
 
 
 def get_tokens() -> list[str]:
     """Достает из конфига все токены vk API, если их нет, то вызывает исключение"""
     config = configparser.ConfigParser()
-    config.read(config_path, encoding='utf-8')
+    config.read(CONFIG_FILE, encoding='utf-8')
     tokens = config.get('VK', 'access_token')
     return json.loads(tokens)
 
@@ -45,7 +44,7 @@ def get_proxies() -> list[list[str | None, list[str, str] | None]]:
     """Достает из конфига все прокси и их данные аутентификации
     Если в файле конфигурации нет никаких прокси, то выдается None, то есть адрес машины"""
     config = configparser.ConfigParser()
-    config.read(config_path, encoding='utf-8')
+    config.read(CONFIG_FILE, encoding='utf-8')
     proxies = config.get('PROXY', 'proxy')
 
     # Если никаких прокси нет, то используем только эту машину

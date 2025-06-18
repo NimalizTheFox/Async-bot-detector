@@ -45,6 +45,9 @@ def parsing_arguments(args) -> tuple[argparse.ArgumentParser, argparse.Namespace
     del_proxy = proxy_subparser.add_parser('delete', help='Удалить прокси из списка')
     del_proxy.add_argument('-a', '--address', required=True, help='Адрес прокси, который нужно удалить')
 
+    # TODO Включить или выключить адрес оригинальной машины
+    # TODO reset - Обнулить прокси (просто записать [])
+
     # Вывести список
     proxy_subparser.add_parser('show', help='Показать все доступные прокси')
 
@@ -63,6 +66,9 @@ def parsing_arguments(args) -> tuple[argparse.ArgumentParser, argparse.Namespace
     # Вывести список токенов API
     token_subparser.add_parser('show', help='Вывести список со всеми токенами VK API')
 
+    # TODO reset - для обнуления токенов (просто записать [])
+
+    # Если нет аргументов, то выводится справка
     if len(args) == 0:
         parser.print_help()
         sys.exit(1)

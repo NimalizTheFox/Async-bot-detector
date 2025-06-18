@@ -36,7 +36,7 @@ class AIOInfoGrabber:
         self.proxy = proxy
         self.proxy_auth = proxy_auth
         self.requests_session: ClientSession | None = None
-        self.db_worker: DatabaseManager | None = None
+        self.db: DatabaseManager | None = None
         self.need_print = need_prints
 
         # Сколько запросов к API сделать за backup_seconds секунд
@@ -81,9 +81,6 @@ class AIOInfoGrabber:
                                    'videos', 'video_playlists', 'clips_followers', 'gifts']
         self.close_counters_list = ['friends', 'pages', 'subscriptions', 'posts']
 
-        # Сразу при объявлении класса запускаем
-        # asyncio.run(self.start())
-
     async def start(self, method: str) -> tuple[dict[str, bool], bool]:
         """
         ВЫПОЛНЯТЬ С ПОМОЩЬЮ asyncio.run(AIOInfoGrabber(*).start(method))!
@@ -99,16 +96,16 @@ class AIOInfoGrabber:
         proxy_auth = aiohttp.BasicAuth(self.proxy_auth[0], self.proxy_auth[1]) if self.proxy_auth is not None else None
         self.requests_session = ClientSession(timeout=ClientTimeout(total=30), proxy=self.proxy, proxy_auth=proxy_auth)
 
-        self.db_worker = DatabaseManager(fr'{self.data_folder}\data.db')
-        await self.db_worker.connect()
-        await self.db_worker.create_tables()
+        self.db = DatabaseManager(fr'{self.data_folder}\data.db')
+        await self.db.connect()
+        await self.db.create_tables()
 
         # Используем одну сессию для всех запросов, так как это быстрее
         async with self.requests_session:
             # === ПОЛЬЗОВАТЕЛИ ===
             if method == 'users':
                 # Смотрим какие пользователи уже проверены и непроверенных проверяем
-                checked_users = await self.db_worker.get_checked_profiles()
+                checked_users = await self.db.get_checked_profiles()
                 unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                 if self.need_print:
                     print(f'\tВсего: {len(self.all_users_id)}, '
@@ -116,7 +113,7 @@ class AIOInfoGrabber:
                           f'Осталось: {len(unchecked_users)}')
                 while len(unchecked_users) != 0 and not self.limit_reached['users']:
                     await self.users_info_process(unchecked_users)    # Сбор данных из сети
-                    checked_users = await self.db_worker.get_checked_profiles()
+                    checked_users = await self.db.get_checked_profiles()
                     unchecked_users = sorted(list(set(self.all_users_id) - set(checked_users)))
                     if self.need_print:
                         print(f'\tВсего: {len(self.all_users_id)}, '
@@ -127,12 +124,12 @@ class AIOInfoGrabber:
 
             # === ГРУППЫ ===
             elif method == 'groups':
-                ids_to_groups = await self.db_worker.get_profiles_to_group_check()
+                ids_to_groups = await self.db.get_profiles_to_group_check()
                 if self.need_print:
                     print(f'\tПредстоит проверить группы у {len(ids_to_groups)} пользователей')
                 while len(ids_to_groups) != 0 and not self.limit_reached['groups']:
                     await self.groups_process(ids_to_groups)
-                    ids_to_groups = await self.db_worker.get_profiles_to_group_check()
+                    ids_to_groups = await self.db.get_profiles_to_group_check()
                     if self.need_print:
                         print(f'\tПредстоит проверить группы у {len(ids_to_groups)} пользователей')
                 if len(ids_to_groups) != 0:
@@ -140,18 +137,18 @@ class AIOInfoGrabber:
 
             # === ПОСТЫ ===
             elif method == 'walls':
-                ids_to_posts = await self.db_worker.get_profiles_to_wall_check()
+                ids_to_posts = await self.db.get_profiles_to_wall_check()
                 if self.need_print:
                     print(f'\tПредстоит проверить посты у {len(ids_to_posts)} пользователей')
                 while len(ids_to_posts) != 0 and not self.limit_reached['walls']:
                     await self.posts_process(ids_to_posts)
-                    ids_to_posts = await self.db_worker.get_profiles_to_wall_check()
+                    ids_to_posts = await self.db.get_profiles_to_wall_check()
                     if self.need_print:
                         print(f'\tПредстоит проверить посты у {len(ids_to_posts)} пользователей')
                 if len(ids_to_posts) != 0:
                     self.need_repeat = True
 
-        await self.db_worker.close()
+        await self.db.close()
 
         # Возврааем словарь достигнутых лимитов и нужно ли повторение
         return self.limit_reached, self.need_repeat
@@ -210,7 +207,7 @@ class AIOInfoGrabber:
         # Иногда БД капризничает и не записывает некоторые профили в таблички, так что перепроверяем.
         # (Это было один раз и я не уверен с чем это было связано, но на всякий случай оставлю)
         # Собираем из БД информацию по закрытым и открытым профилям
-        close_profiles, close_info, open_profiles, open_info = await self.db_worker.get_all_profiles_info()
+        close_profiles, close_info, open_profiles, open_info = await self.db.get_all_profiles_info()
 
         # Если профиль есть в списке профилей, но по неу нет информации, то его нужно перепроверить
         to_recheck = sorted(list(set(close_profiles) - set(close_info)) + list(set(open_profiles) - set(open_info)))
@@ -220,8 +217,8 @@ class AIOInfoGrabber:
             self.need_repeat = True
             # print(f'\t[{get_current_time()}] Нужно перепроверить {len(to_recheck)} профилей')
         for item in to_recheck:
-            await self.db_worker.remove_from_all_tables(int(item))
-        await self.db_worker.save_db()
+            await self.db.remove_from_all_tables(int(item))
+        await self.db.save_db()
 
     async def groups_process(self, users_id):
         """Разбитие на раунды сохранения и выполнение сбора информации по группам пользователей"""
@@ -497,50 +494,50 @@ class AIOInfoGrabber:
         """Сохраняет данные по пользователям в БД"""
         for item in results:
             # Записываем общую информацию о профиле (его id, удален ли, закрыт ли)
-            await self.db_worker.save_user_result(item)
+            await self.db.save_user_result(item)
 
             # Если профиль не удален и открыт, то упорядочиваем данные как для открытого профиля
             if item.get('deactivated') is None and not item['is_closed']:
                 save_values = await self.user_data_analyse(item, self.open_fillers_list, self.open_counters_list)
-                await self.db_worker.save_open_profile_data(save_values)        # Записываем конкретно для открытого
+                await self.db.save_open_profile_data(save_values)        # Записываем конкретно для открытого
 
             # Если профиль не удален, но закрыт, то упорядочиваем данные как для закрытого профиля
             elif item.get('deactivated') is None and item['is_closed']:
                 save_values = await self.user_data_analyse(item, self.close_fillers_list, self.close_counters_list)
-                await self.db_worker.save_close_profile_data(save_values)       # Записываем конкретно для закрытого
+                await self.db.save_close_profile_data(save_values)       # Записываем конкретно для закрытого
 
             # Сохраняем БД только сейчас, чтобы при ошибке запись об этом профиле полностью отсутствовала
             # Это позволит легко найти непроверенные или профили с ошибкой
             # + немного оптимизации, так как это одно сохранение вместо двух
-            await self.db_worker.save_db()
+            await self.db.save_db()
 
     async def write_groups(self, results: list):
         """Сохраняет данные об группах пользователей в БД"""
         for item in results:
             if item[1] is False:
-                await self.db_worker.remove_from_all_tables(int(item[0]))
+                await self.db.remove_from_all_tables(int(item[0]))
                 self.need_repeat = True
                 # print(int(item[0]))
                 # print(item)
             else:
-                await self.db_worker.update_user_group(item)
+                await self.db.update_user_group(item)
                 save_values = await self.group_data_analyse(item)
-                await self.db_worker.save_group_data(save_values)
-            await self.db_worker.save_db()
+                await self.db.save_group_data(save_values)
+            await self.db.save_db()
 
     async def write_posts(self, results: list):
         """Сохраняет данные об постах пользователей в БД"""
         for item in results:
             if item[1] is False:
-                await self.db_worker.remove_from_all_tables(int(item[0]))
+                await self.db.remove_from_all_tables(int(item[0]))
                 self.need_repeat = True
                 # print(int(item[0]))
                 # print(item)
             else:
-                await self.db_worker.update_user_wall(item)
+                await self.db.update_user_wall(item)
                 save_values = await self.wall_data_analyse(item)
-                await self.db_worker.save_wall_data(save_values)
-            await self.db_worker.save_db()
+                await self.db.save_wall_data(save_values)
+            await self.db.save_db()
 
 
 def main():

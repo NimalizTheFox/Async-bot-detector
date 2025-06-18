@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from .paths import OPEN_MODEL, CLOSE_MODEL
 
 torch.set_num_threads(8)
 
@@ -49,7 +50,7 @@ class PredictionModel:
     def load_model_from_params(self):
         self.define_model()
         model_params = torch.load(
-            fr'..\models\{"close" if self.is_close else "open"}_model_state_dict.pt',
+            CLOSE_MODEL if self.is_close else OPEN_MODEL,
             weights_only=True
         )
         self.model.load_state_dict(model_params)

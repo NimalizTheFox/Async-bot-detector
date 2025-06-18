@@ -3,15 +3,16 @@ import os
 
 from .data_collector import take_data
 from .data_analysis import start_analyse
+from .paths import DATA_DIR, PROJECT_ROOT
 
 
 def main():
     start_time = time.time_ns()
 
-    with open(r'../../0738. 738.txt', 'r') as file:
+    with open(PROJECT_ROOT / '0738. 738.txt', 'r') as file:
         ids = file.read().strip().split('\n')
 
-    data_folder = r'..\data\738'
+    data_folder = DATA_DIR / '738'
 
     if not os.path.exists(data_folder):
         os.mkdir(data_folder)

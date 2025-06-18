@@ -13,11 +13,11 @@ def get_current_time() -> str:
 
 async def analyse_all_profiles(data_folder: str):
     """Проводит все собранные профили через нейросеть для определения вероятности бота"""
-    db_worker = DatabaseManager(fr'{data_folder}\data.db')
-    await db_worker.connect()
-    await db_worker.create_tables()
+    db = DatabaseManager(fr'{data_folder}\data.db')
+    await db.connect()
+    await db.create_tables()
 
-    _, close_profiles, _, open_profiles = await db_worker.get_all_profiles_info()
+    _, close_profiles, _, open_profiles = await db.get_all_profiles_info()
 
     print(f'[{get_current_time()}][INFO] Загружаем PyTorch для нейросети')
     from src.bot_detector.neural_models import PredictionModel
@@ -27,7 +27,7 @@ async def analyse_all_profiles(data_folder: str):
         print(f'[{get_current_time()}][INFO] Анализируем {"закрытые" if is_close else "открытые"} профили')
 
         nn_worker = PredictionModel(is_close)                                # Грузим нейронку
-        generator = db_worker.get_batched_data(is_close=is_close)   # Генератором забираем данные в батчах из БД
+        generator = db.get_batched_data(is_close=is_close)   # Генератором забираем данные в батчах из БД
 
         iterator = 0
         async for batch in generator:
@@ -36,11 +36,11 @@ async def analyse_all_profiles(data_folder: str):
 
             data_to_neuro = [(row[0], row[1:]) for row in batch]    # Убираем id для нейронки
             result = nn_worker.model_predict(data_to_neuro)       # Получаем предсказание
-            await db_worker.save_analyse_result(result)             # И сохраняем все в таблицу
+            await db.save_analyse_result(result)             # И сохраняем все в таблицу
         print('')
 
         await generator.aclose()
-    await db_worker.close()
+    await db.close()
 
 
 def start_analyse(data_folder: str):
