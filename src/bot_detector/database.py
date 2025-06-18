@@ -1,7 +1,7 @@
 import aiosqlite
 
 
-class AioDBWorks:
+class DatabaseManager:
     def __init__(self, file: str):
         """
         Класс, предназначенный для асинхронной работы с БД

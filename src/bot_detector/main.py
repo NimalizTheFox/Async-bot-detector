@@ -1,14 +1,14 @@
 import time
 import os
 
-from src.InfoProcess import take_data
-from src.Analysis import start_analyse
+from .data_collector import take_data
+from .data_analysis import start_analyse
 
 
 def main():
     start_time = time.time_ns()
 
-    with open(r'..\0738. 738.txt', 'r') as file:
+    with open(r'../../0738. 738.txt', 'r') as file:
         ids = file.read().strip().split('\n')
 
     data_folder = r'..\data\738'

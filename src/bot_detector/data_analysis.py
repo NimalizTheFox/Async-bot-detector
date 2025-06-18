@@ -2,7 +2,7 @@ import asyncio
 import math
 import datetime
 
-from src.DBWorks import AioDBWorks
+from .database import DatabaseManager
 
 
 def get_current_time() -> str:
@@ -13,14 +13,14 @@ def get_current_time() -> str:
 
 async def analyse_all_profiles(data_folder: str):
     """Проводит все собранные профили через нейросеть для определения вероятности бота"""
-    db_worker = AioDBWorks(fr'{data_folder}\data.db')
+    db_worker = DatabaseManager(fr'{data_folder}\data.db')
     await db_worker.connect()
     await db_worker.create_tables()
 
     _, close_profiles, _, open_profiles = await db_worker.get_all_profiles_info()
 
     print(f'[{get_current_time()}][INFO] Загружаем PyTorch для нейросети')
-    from src.NeuroWorks import PredictionModel
+    from src.bot_detector.neural_models import PredictionModel
 
     for is_close in [False, True]:
         data_len = math.ceil((len(close_profiles) if is_close else len(open_profiles))/1000)

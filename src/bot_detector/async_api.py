@@ -4,7 +4,7 @@ import datetime
 import math
 from aiohttp import ClientSession, ClientTimeout
 from statistics import fmean, median
-from src.DBWorks import AioDBWorks
+from .database import DatabaseManager
 
 
 def get_current_time() -> str:
@@ -36,7 +36,7 @@ class AIOInfoGrabber:
         self.proxy = proxy
         self.proxy_auth = proxy_auth
         self.requests_session: ClientSession | None = None
-        self.db_worker: AioDBWorks | None = None
+        self.db_worker: DatabaseManager | None = None
         self.need_print = need_prints
 
         # Сколько запросов к API сделать за backup_seconds секунд
@@ -99,7 +99,7 @@ class AIOInfoGrabber:
         proxy_auth = aiohttp.BasicAuth(self.proxy_auth[0], self.proxy_auth[1]) if self.proxy_auth is not None else None
         self.requests_session = ClientSession(timeout=ClientTimeout(total=30), proxy=self.proxy, proxy_auth=proxy_auth)
 
-        self.db_worker = AioDBWorks(fr'{self.data_folder}\data.db')
+        self.db_worker = DatabaseManager(fr'{self.data_folder}\data.db')
         await self.db_worker.connect()
         await self.db_worker.create_tables()
 

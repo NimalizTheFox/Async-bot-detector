@@ -2,7 +2,7 @@ import os
 import sys
 import argparse
 
-from src.ConfigWorks import proxy_append, token_append, proxy_remove, token_remove, get_proxies, get_tokens
+from .config_manager import proxy_append, token_append, proxy_remove, token_remove, get_proxies, get_tokens
 
 
 def red(text: str):
