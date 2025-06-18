@@ -5,7 +5,7 @@ from math import ceil
 from multiprocessing import Process, Manager
 
 from src.AsyncAPI import AIOInfoGrabber
-from src.ConfigWorks import get_proxys, get_tokens
+from src.ConfigWorks import get_proxies, get_tokens
 
 
 def list_to_chunks(lst: list, n: int):
@@ -130,8 +130,11 @@ def take_data(all_ids: list, data_folder: str) -> None:
     """
     manager = Manager()         # Менеджер управления данными для процессов
 
-    proxys = get_proxys()       # Забираем все прокси
+    proxys = get_proxies()       # Забираем все прокси
     token_keys = get_tokens()   # Забираем все токены
+
+    if len(token_keys) == 0:
+        raise ValueError('Необходимо указать как минимум один токен API!')
 
     # И преобразуем их в общий словарь с ограничениями по методам
     tokens = {}

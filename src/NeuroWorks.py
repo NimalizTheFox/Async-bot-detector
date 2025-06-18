@@ -4,7 +4,7 @@ import torch.nn as nn
 torch.set_num_threads(8)
 
 
-class BotsNormalize(torch.nn.Module):
+class DataNormalizer(torch.nn.Module):
     def __init__(self, is_close: bool, device: str):
         super().__init__()
         self.device = device
@@ -23,12 +23,12 @@ class BotsNormalize(torch.nn.Module):
         return (clip_tensor - self.min_clip) / (self.max_clip - self.min_clip)
 
 
-class NNWork:
+class PredictionModel:
     def __init__(self, is_close):
         self.model: nn.Sequential | None = None
         self.input_size = 16 if is_close else 45
         self.is_close = is_close
-        self.transform = BotsNormalize(is_close, 'cpu')
+        self.transform = DataNormalizer(is_close, 'cpu')
 
         self.load_model_from_params()
 
@@ -53,9 +53,9 @@ class NNWork:
             weights_only=True
         )
         self.model.load_state_dict(model_params)
-
-    def analyse_profile(self, profile_data_list: list):
         self.model.eval()
+
+    def model_predict(self, profile_data_list: list):
         with torch.no_grad():
             results = []
             for profile_data in profile_data_list:

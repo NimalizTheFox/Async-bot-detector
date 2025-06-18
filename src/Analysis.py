@@ -20,13 +20,13 @@ async def analyse_all_profiles(data_folder: str):
     _, close_profiles, _, open_profiles = await db_worker.get_all_profiles_info()
 
     print(f'[{get_current_time()}][INFO] Загружаем PyTorch для нейросети')
-    from src.NeuroWorks import NNWork
+    from src.NeuroWorks import PredictionModel
 
     for is_close in [False, True]:
         data_len = math.ceil((len(close_profiles) if is_close else len(open_profiles))/1000)
         print(f'[{get_current_time()}][INFO] Анализируем {"закрытые" if is_close else "открытые"} профили')
 
-        nn_worker = NNWork(is_close)                                # Грузим нейронку
+        nn_worker = PredictionModel(is_close)                                # Грузим нейронку
         generator = db_worker.get_batched_data(is_close=is_close)   # Генератором забираем данные в батчах из БД
 
         iterator = 0
@@ -35,7 +35,7 @@ async def analyse_all_profiles(data_folder: str):
             print(f'\r\tГруппа (х1000): {iterator}/{data_len}', end='')
 
             data_to_neuro = [(row[0], row[1:]) for row in batch]    # Убираем id для нейронки
-            result = nn_worker.analyse_profile(data_to_neuro)       # Получаем предсказание
+            result = nn_worker.model_predict(data_to_neuro)       # Получаем предсказание
             await db_worker.save_analyse_result(result)             # И сохраняем все в таблицу
         print('')
 
