@@ -5,7 +5,7 @@ from math import ceil
 from multiprocessing import Process, Manager
 
 from .async_api import AIOInfoGrabber
-from .config_manager import get_proxies, get_tokens
+from .config_manager import TokenManager, ProxyManager
 
 
 def list_to_chunks(lst: list, n: int):
@@ -122,16 +122,17 @@ class InfoProcess:
             print(message)
 
 
-def take_data(all_ids: list, data_folder: str) -> None:
+def take_data(all_ids: list, data_folder: str, need_original_address: bool = True) -> None:
     """
     Создание и запуск Процессов для сбора информации пользователей
     :param all_ids: Список со всеми id, у которых нужно собрать информацию.
-    :param data_folder: Папка, в которую помещается БД с данными анализа
+    :param data_folder: Папка, в которую помещается БД с данными анализа.
+    :param need_original_address: Нужен ли адрес оригинальной машины в прокси
     """
     manager = Manager()         # Менеджер управления данными для процессов
 
-    proxys = get_proxies()       # Забираем все прокси
-    token_keys = get_tokens()   # Забираем все токены
+    proxys = ProxyManager(need_original_address).get_proxies()  # Забираем все прокси
+    token_keys = TokenManager().get_tokens()                    # Забираем все токены
 
     if len(token_keys) == 0:
         raise ValueError('Необходимо указать как минимум один токен API!')

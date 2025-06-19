@@ -16,7 +16,6 @@ _settings_original = """[VK]
 access_token = []
 
 [PROXY]
-use_original_address = 1
 proxy = []"""
 
 

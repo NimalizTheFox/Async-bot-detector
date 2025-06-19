@@ -4,6 +4,8 @@ import datetime
 import math
 from aiohttp import ClientSession, ClientTimeout
 from statistics import fmean, median
+from typing import Literal
+
 from .database import DatabaseManager
 
 
@@ -81,11 +83,12 @@ class AIOInfoGrabber:
                                    'videos', 'video_playlists', 'clips_followers', 'gifts']
         self.close_counters_list = ['friends', 'pages', 'subscriptions', 'posts']
 
-    async def start(self, method: str) -> tuple[dict[str, bool], bool]:
+    async def start(self, method: Literal['users', 'groups', 'walls']) -> tuple[dict[str, bool], bool]:
         """
         ВЫПОЛНЯТЬ С ПОМОЩЬЮ asyncio.run(AIOInfoGrabber(*).start(method))!
+
         Выполняет сбор информации по выбранному методу.
-        :param method: 'users', 'groups' и 'walls', только они.
+        :param method: Работают все методы, но информация для нейронки берется только из users
         :return: Словарь лимитов и нужен ли повтор
         """
         if method not in ['users', 'groups', 'walls']:
