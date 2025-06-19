@@ -73,6 +73,12 @@ class DatabaseManager:
                 last_id = batch[-1][0]  # Запоминаем последний ID
                 yield batch
 
+    async def get_result_data(self):
+        async with self.session.cursor() as curr:
+            db_response = await curr.execute('SELECT * FROM results')
+            result = await db_response.fetchall()
+            return result
+
     async def save_analyse_result(self, data: list):
         async with self.session.cursor() as curr:
             for item in data:
