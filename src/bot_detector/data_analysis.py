@@ -2,7 +2,7 @@ import asyncio
 import math
 import datetime
 
-from .database import DatabaseManager
+from src.bot_detector.database import DatabaseManager
 
 
 def get_current_time() -> str:

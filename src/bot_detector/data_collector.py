@@ -4,8 +4,8 @@ import datetime
 from math import ceil
 from multiprocessing import Process, Manager
 
-from .async_api import AIOInfoGrabber
-from .config_manager import TokenManager, ProxyManager
+from src.bot_detector.async_api import AIOInfoGrabber
+from src.bot_detector.config_manager import TokenManager, ProxyManager
 
 
 def list_to_chunks(lst: list, n: int):

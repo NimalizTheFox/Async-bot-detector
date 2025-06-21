@@ -1,7 +1,19 @@
 from pathlib import Path
+import sys
+
+
+def get_base_path():
+    """Определяет базовый путь в зависимости от режима выполнения"""
+    if getattr(sys, 'frozen', False):
+        # Режим .exe: используем временную папку распаковки
+        return Path(sys._MEIPASS)
+    else:
+        # Режим разработки: корень проекта (3 уровня вверх)
+        return Path(__file__).resolve().parent.parent.parent
+
 
 # Автоматическое определение корня проекта
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = get_base_path()
 
 # Основные директории
 DATA_DIR = PROJECT_ROOT / 'data'

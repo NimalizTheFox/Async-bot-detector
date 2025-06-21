@@ -2,12 +2,12 @@ import os
 import sys
 import argparse
 
-from .config_manager import TokenManager, ProxyManager
-from .file_parser import txt_parser, xlsx_parser
-from .data_collector import take_data
-from .data_analysis import start_analyse
-from .paths import DATA_DIR
-from .file_builder import create_statistic_file, create_output_file
+from src.bot_detector.config_manager import TokenManager, ProxyManager
+from src.bot_detector.file_parser import txt_parser, xlsx_parser
+from src.bot_detector.data_collector import take_data
+from src.bot_detector.data_analysis import start_analyse
+from src.bot_detector.paths import DATA_DIR
+from src.bot_detector.file_builder import create_statistic_file, create_output_file
 
 
 def red(text: str):

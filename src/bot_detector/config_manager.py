@@ -1,7 +1,7 @@
 import json
 import configparser
 
-from .paths import CONFIG_FILE
+from src.bot_detector.paths import CONFIG_FILE
 
 
 class TokenManager:

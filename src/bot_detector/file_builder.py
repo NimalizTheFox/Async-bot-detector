@@ -2,7 +2,7 @@ import asyncio
 
 import pandas as pd
 
-from .database import DatabaseManager
+from src.bot_detector.database import DatabaseManager
 
 
 async def build_output_file(data_folder: str, sheet_dict: dict, output_folder: str, original_file_name: str):
@@ -56,7 +56,7 @@ async def build_statistic_file(data_folder: str, sheet_dict: dict, output_folder
         for sheet_name, id_list in sheet_dict.items():
             ids_number = len(id_list)
             if ids_number == 0:
-                file.write(f'{sheet_name} -\tАккаунты: 0,\tБоты: 0,\tОтношение: 0.0')
+                file.write(f'{sheet_name} -\tАккаунты: 0,\tБоты: 0,\tОтношение: 0.0\n')
                 continue
 
             bots = 0

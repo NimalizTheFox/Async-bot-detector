@@ -6,7 +6,7 @@ from aiohttp import ClientSession, ClientTimeout
 from statistics import fmean, median
 from typing import Literal
 
-from .database import DatabaseManager
+from src.bot_detector.database import DatabaseManager
 
 
 def get_current_time() -> str:

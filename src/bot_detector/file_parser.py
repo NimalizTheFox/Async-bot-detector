@@ -53,6 +53,22 @@ def xlsx_parser(file_path: str, columns_with_id: list, have_headings: bool) -> t
             # Избавляемся от nan
             ids_list = [item for item in flat_list if item == item]
 
+            new_list = []
+            for item in ids_list:
+                # Если это ссылка, то получаем последнюю часть
+                if '/' in item:
+                    item = item.split('/')[-1]
+
+                    # И если оно начинается с id, то добавляем в список
+                    if item.startswith('id'):
+                        new_list.append(item[2:])
+                else:
+                    # Если это не ссылка, а так же id в начале или это просто число, то записываем его в список
+                    if item.startswith('id'):
+                        new_list.append(item[2:])
+                    elif item.isdigit():
+                        new_list.append(item)
+
             # Избавляемся от id групп, оставляем только числа
             ids_list = [int(item[item.rfind('/') + 3:])
                         for item in ids_list

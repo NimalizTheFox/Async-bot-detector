@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from .paths import OPEN_MODEL, CLOSE_MODEL
+
+from src.bot_detector.paths import OPEN_MODEL, CLOSE_MODEL
 
 torch.set_num_threads(8)
 
