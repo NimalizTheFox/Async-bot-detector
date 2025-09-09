@@ -32,16 +32,6 @@ class DatabaseManager:
         """Возвращает все id, которые уже записаны в БД"""
         return await self.get_data_in_list('SELECT user_id FROM users')
 
-    async def get_profiles_to_group_check(self):
-        """Возвращает id профилей, у которых еще не проверены группы """
-        return await self.get_data_in_list(
-            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND group_checked = 0')
-
-    async def get_profiles_to_wall_check(self):
-        """Возвращает id профилей, у которых еще не проверена стена """
-        return await self.get_data_in_list(
-            'SELECT user_id FROM users WHERE deactivated = 0 AND is_close = 0 AND wall_checked = 0')
-
     async def get_all_profiles_info(self):
         """Собирает все данные по всем профилям (и только профилям, без групп и стен)"""
         close_profiles = await self.get_data_in_list(
@@ -111,38 +101,12 @@ class DatabaseManager:
             await curr.execute(
                 f'INSERT INTO users_info_close VALUES({", ".join(["?" for _ in range(17)])})', data)
 
-    async def update_user_group(self, data):
-        """Сохраняет отметку о прохождении профилем проверки групп в БД"""
-        async with self.session.cursor() as curr:
-            await curr.execute(
-                'UPDATE users SET group_checked = ? WHERE user_id = ?', (1, int(data[0])))
-
-    async def save_group_data(self, data):
-        """Сохраняет упорядоченные данные о группах профиля в БД"""
-        async with self.session.cursor() as curr:
-            await curr.execute(
-                f'INSERT INTO users_groups VALUES({", ".join(["?" for _ in range(6)])})', data)
-
-    async def update_user_wall(self, data):
-        """Сохраняет отметку о прохождении профилем проверки постов в БД"""
-        async with self.session.cursor() as curr:
-            await curr.execute(
-                'UPDATE users SET wall_checked = ? WHERE user_id = ?', (1, int(data[0])))
-
-    async def save_wall_data(self, data):
-        """Сохраняет упорядоченные данные о постах профиля в БД"""
-        async with self.session.cursor() as curr:
-            await curr.execute(
-                f'INSERT INTO users_posts VALUES({", ".join(["?" for _ in range(22)])})', data)
-
     async def remove_from_all_tables(self, profile_id):
         """Удаляет пользователя из всех таблиц в БД для его переопределения"""
         async with self.session.cursor() as curr:
             await curr.execute(f'DELETE FROM users WHERE user_id = ?', (profile_id, ))
             await curr.execute(f'DELETE FROM users_info_open WHERE user_id = ?', (profile_id, ))
             await curr.execute(f'DELETE FROM users_info_close WHERE user_id = ?', (profile_id, ))
-            await curr.execute(f'DELETE FROM users_groups WHERE user_id = ?', (profile_id, ))
-            await curr.execute(f'DELETE FROM users_posts WHERE user_id = ?', (profile_id, ))
             await curr.execute(f'DELETE FROM results WHERE user_id = ?', (profile_id, ))
 
             await self.session.commit()
@@ -157,9 +121,7 @@ class DatabaseManager:
                 (
                     user_id INTEGER PRIMARY KEY,
                     deactivated INTEGER, --0 или 1: 0 - действует, 1 - забанен/удален 
-                    is_close INTEGER, --закрыт ли профиль
-                    group_checked INTEGER DEFAULT 0,
-                    wall_checked INTEGER DEFAULT 0
+                    is_close INTEGER --закрыт ли профиль
                 )
                 """
             )
@@ -212,40 +174,6 @@ class DatabaseManager:
                     have_clips_followers INTEGER, clips_followers INTEGER, 
                     have_gifts INTEGER, gifts INTEGER,
                     counters_fullness REAL --Сколько из 11 счетчиков есть у профиля (n/11)
-                );
-                """
-            )
-
-            # Таблица информации о группах открытых пользователей
-            await curr.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users_groups
-                (
-                    user_id INTEGER PRIMARY KEY,
-                    groups_count INTEGER,
-                    groups_without_photo INTEGER,
-                    closed_groups INTEGER,
-                    type_page INTEGER,
-                    type_group INTEGER
-                );
-                """
-            )
-
-            # Таблица информации о постах открытых пользователей
-            await curr.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users_posts
-                (
-                    user_id INTEGER PRIMARY KEY,
-                    posts_count INTEGER, 
-                    posts_to_all_rel REAL, --Отношение постов ко всем
-                    reposts_to_all_rel REAL, --Отношение репостов ко всем 
-                    posts_max_id INTEGER, --Количество постов со всеми удаленными 
-                    min_comms INTEGER, max_comms INTEGER, avg_comms REAL, mid_comms INTEGER, --Стат по комментариям
-                    min_likes INTEGER, max_likes INTEGER, avg_likes REAL, mid_likes INTEGER, --Стат по лайкам
-                    min_views INTEGER, max_views INTEGER, avg_views REAL, mid_views INTEGER, --Стат по просмотрам
-                    min_reposts INTEGER, max_reposts INTEGER, avg_reposts REAL, mid_reposts INTEGER, --Стат по репостам
-                    posts_with_text_rel REAL --Отношение постов с текстами ко всем 
                 );
                 """
             )

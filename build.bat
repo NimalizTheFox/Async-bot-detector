@@ -3,7 +3,7 @@ set OUTPUT_DIR=dist
 
 nuitka ^
     --standalone ^
-    --mingw64
+    --mingw64 ^
     --output-filename=bot_detector.exe ^
     --follow-imports ^
     --include-package=src.bot_detector ^

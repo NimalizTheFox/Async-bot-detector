@@ -65,7 +65,7 @@ async def build_statistic_file(data_folder: str, sheet_dict: dict, output_folder
                 if value >= 0.5:
                     bots += 1
             file.write(
-                f'{sheet_name} -\tАккаунты: {ids_number},\tБоты: {bots},\tОтношение: {round(bots/ids_number, 4)}')
+                f'{sheet_name} -\tАккаунты: {ids_number},\tБоты: {bots},\tОтношение: {round(bots/ids_number, 4)}\n')
 
     await db.close()
 

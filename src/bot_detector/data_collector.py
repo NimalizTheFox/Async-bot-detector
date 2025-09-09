@@ -59,14 +59,12 @@ class InfoProcess:
             self.barrier.wait()
             self.informing(f'[{get_current_time()}][INFO] Начинаем процесс сбора информации')
 
+            # Обнуляем переменную повторения
             if self.need_repeat.value == 1:
                 self.need_repeat.value = 0
 
-            # Запускаем нужные методы
-            # (для больших наборов советую только users, т.к. он не ограничен по кол-ву вызовов)
+            # Запускаем сбор информации по методу
             self.grab_info_method('users')
-            # self.grab_info_method('groups')   # Ограничение  ~800 id после чего блокируется метод
-            # self.grab_info_method('walls')    # Ограничение ~2000 id после чего блокируется метод
 
             # Ожидание пока все процессы завершат сбор информации
             self.barrier.wait()
@@ -98,7 +96,7 @@ class InfoProcess:
 
             # Считаем примерное время ожидания завершения метода (при первоначальном запуске)
             # Кол-во пользователей, которое может обработать метод за минуту
-            count_users_method = {'users': 6525, 'groups': 6575, 'walls': 2380}
+            count_users_method = {'users': 6525}
             time_to_wait = int((len(current_process_users) / count_users_method[method]) * 2) + 1
             self.informing(f'[{get_current_time()}][INFO] Собираем информацию по '
                            f'методу {method}, время сбора с нуля: ~{time_to_wait} мин.')
@@ -140,13 +138,13 @@ def take_data(all_ids: list, data_folder: str, need_original_address: bool = Tru
     # И преобразуем их в общий словарь с ограничениями по методам
     tokens = {}
     for key in token_keys:
-        tokens[key] = manager.dict({'users': False, 'groups': False, 'walls': False})
+        tokens[key] = manager.dict({'users': False})
 
     # Узнаем сколько потоков мы можем задействовать (если не можем узнать, то 8)
     cores_num = os.cpu_count()
     cores_num = 8 if cores_num is None else cores_num
-
     process_number = min(len(proxys), len(token_keys), cores_num)  # Кол-во процессов
+
     barrier = manager.Barrier(process_number)           # Блокиратор для синхронизации процессов
     need_repeat_val = manager.Value('i', 1)             # Переменная для повторения
 
