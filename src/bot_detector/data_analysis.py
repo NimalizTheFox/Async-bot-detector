@@ -29,7 +29,7 @@ async def analyse_all_profiles(data_folder: str):
         print(f'[{get_current_time()}][INFO] Анализируем {"закрытые" if is_close else "открытые"} профили')
 
         nn_worker = PredictionModel(is_close)                # Грузим нейронку
-        generator = await db.get_batched_data(is_close=is_close)   # Генератором забираем данные в батчах из БД
+        generator = db.get_batched_data(is_close=is_close)   # Генератором забираем данные в батчах из БД
 
         iterator = 0
         async for batch in generator:
